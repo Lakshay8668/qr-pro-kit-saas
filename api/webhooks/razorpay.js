@@ -1,0 +1,28 @@
+// api/webhooks/razorpay.js — Razorpay -> POST https://YOUR-DOMAIN/api/webhooks/razorpay
+// Events to enable: subscription.activated, subscription.charged, subscription.pending,
+//                   subscription.halted, subscription.cancelled, subscription.completed, subscription.updated
+import { readRaw } from "../_lib/raw.js";
+import { verifyRazorpaySignature } from "../_lib/providers.js";
+import { createSubscriptionHandlers } from "../_lib/subscriptions.js";
+import { getDb, serverTs } from "../_lib/firebaseAdmin.js";
+
+export const config = { api: { bodyParser: false } };
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") { res.statusCode = 405; return res.end("method not allowed"); }
+  try {
+    const raw = await readRaw(req);
+    if (!verifyRazorpaySignature(raw, req.headers["x-razorpay-signature"], process.env.RAZORPAY_WEBHOOK_SECRET)) {
+      res.statusCode = 400;
+      return res.end("bad signature");
+    }
+    const h = createSubscriptionHandlers({ getDb, serverTs, env: process.env });
+    const result = await h.razorpayEvent(JSON.parse(raw), h.eventIdFor(raw, req.headers["x-razorpay-event-id"]));
+    res.statusCode = 200;
+    res.end(result);
+  } catch (e) {
+    console.error("razorpay webhook error", e);
+    res.statusCode = 500;
+    res.end("error");
+  }
+}

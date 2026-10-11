@@ -1,0 +1,15 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // PDFs / menus / images used by "File / Menu" QR codes.
+    // Public read (scanners aren't signed in); only the owner can upload, max 10 MB.
+    match /uploads/{uid}/{file} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+                            && request.auth.uid == uid
+                            && request.resource.size < 10 * 1024 * 1024
+                            && request.resource.contentType.matches('application/pdf|image/(png|jpeg|webp|gif)');
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}

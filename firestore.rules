@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+
+    function ownsLink(linkId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/links/$(linkId)).data.ownerId == request.auth.uid;
+    }
+
+    // An admin can switch a customer off (users/{uid}.disabled, written by the Admin API only).
+    function notDisabled() {
+      return !(exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.disabled == true);
+    }
+
+    // Entitlements snapshot (users/{uid}.ent) is written ONLY by the server when the plan changes
+    // (billing webhooks / admin). Rules use it to gate features that are edited straight from the browser.
+    function can(feature) {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('ent', {}).get(feature, false) == true;
+    }
+
+    // Customer profile (created on first login). Customers can't touch `disabled`, `plan`, `ent`, `billing`, ...
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.disabled == false
+                    && request.resource.data.keys().hasOnly(['email', 'displayName', 'createdAt', 'disabled']);
+      allow update: if signedIn() && request.auth.uid == uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email', 'displayName']);
+      allow list, delete: if false;
+    }
+
+    // Everything about QR links is private to the owner. Scans are served by the Vercel
+    // function (Admin SDK), which is also what the admin dashboard uses.
+    match /links/{linkId} {
+      allow get, list: if signedIn() && request.auth.uid == resource.data.ownerId;
+      // v9: links are created ONLY by the server (api/links.js) — that's where plan limits are enforced.
+      allow create: if false;
+      // Owners can edit their links, but cannot: lift an admin pause, change owner/kind/scan count
+      // (kind would let a static QR be flipped into a dynamic one past the plan limit), or switch on
+      // plan-gated features (password / per-OS redirects) without the plan that includes them.
+      // Removing a password or per-OS redirect is always allowed.
+      allow update: if signedIn() && request.auth.uid == resource.data.ownerId
+                    && request.resource.data.get('adminPaused', false) == resource.data.get('adminPaused', false)
+                    && request.resource.data.ownerId == resource.data.ownerId
+                    && request.resource.data.get('kind', 'redirect') == resource.data.get('kind', 'redirect')
+                    && request.resource.data.get('scans', 0) == resource.data.get('scans', 0)
+                    && (request.resource.data.get('password', null) == resource.data.get('password', null)
+                        || request.resource.data.get('password', null) == null
+                        || can('password'))
+                    && (request.resource.data.get('destinations', null) == resource.data.get('destinations', null)
+                        || request.resource.data.get('destinations', null) == null
+                        || can('deviceTargeting'));
+      allow delete: if signedIn() && request.auth.uid == resource.data.ownerId;
+
+      match /scans/{scanId} {
+        allow read, delete: if ownsLink(linkId);
+        allow create, update: if false;
+      }
+    }
+
+    // usage, billingEvents, adminLog and anything else: no client access (server only).
+  }
+}
