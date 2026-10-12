@@ -1,14 +1,31 @@
 // src/lib/users.js — creates the customer's profile doc on first login (used by the admin dashboard).
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db, getFirestoreStatus, setFirestoreUnavailable, setFirestoreAvailable } from "./firebase";
+import { api } from "./api";
 
 const done = new Set();
 
 export async function ensureUserDoc(user) {
   if (!user || done.has(user.uid)) return;
-  if (!db || getFirestoreStatus().available === false) return; // Don't query nonexistent database
-
   done.add(user.uid);
+
+  // 1. Sync with backend persistent database
+  try {
+    await api("/api/users?action=sync", {
+      method: "POST",
+      body: {
+        email: user.email || "",
+        displayName: user.displayName || "",
+      },
+    });
+  } catch (err) {
+    // Non-fatal if offline or during initial startup
+    console.debug("[Users] Backend user sync note:", err.message);
+  }
+
+  // 2. Fallback to client Firestore if available
+  if (!db || getFirestoreStatus().available === false) return;
+
   try {
     const ref = doc(db, "users", user.uid);
     const snap = await getDoc(ref);
@@ -33,8 +50,6 @@ export async function ensureUserDoc(user) {
       msg.includes("(default)")
     ) {
       setFirestoreUnavailable(err);
-      console.warn("Cloud Firestore is not available for user profiles:", err.message);
-      // Keep user.uid in done so we don't spam the console on every state change
     } else {
       done.delete(user.uid); // retry next time on transient errors
     }

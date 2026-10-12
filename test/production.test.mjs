@@ -367,4 +367,173 @@ console.log("Running production repair & verification tests...");
   ok("checkout generates valid subscription and returns Razorpay hosted checkout URL");
 }
 
+// ------------------------------------------------------------------ 4. Customer Persistence & Admin Overview Accuracy
+{
+  const db = createUniversalDb();
+  let nextId = 200;
+
+  const mockVerify = async (token) => {
+    if (token === "token_charlie") return { uid: "user_charlie", email: "charlie@example.com", name: "Charlie" };
+    throw new Error("Invalid token");
+  };
+
+  const linksHandler = createLinksHandler({
+    getDb: () => db,
+    verify: mockVerify,
+    serverTs: () => new Date(),
+    now: () => Date.now(),
+    newId: () => `qr_${++nextId}`,
+  });
+
+  // Verify Charlie does not exist in users collection yet
+  let userSnap = await db.collection("users").doc("user_charlie").get();
+  assert.equal(userSnap.exists, false);
+
+  // Charlie creates a QR code
+  const res = await callJson(linksHandler, {
+    method: "POST",
+    headers: { Authorization: "Bearer token_charlie" },
+    query: { action: "create" },
+    body: {
+      link: {
+        destination: "https://charlie.example.com",
+        label: "Charlie Shop",
+        kind: "redirect",
+      },
+    },
+  });
+  assert.equal(res.code, 200);
+
+  // Verify Charlie was automatically persisted to users collection
+  userSnap = await db.collection("users").doc("user_charlie").get();
+  assert.equal(userSnap.exists, true);
+  assert.equal(userSnap.data().email, "charlie@example.com");
+  assert.equal(userSnap.data().plan, "free");
+  assert.equal(userSnap.data().planStatus, "active");
+  ok("customer record is automatically created and persisted when creating QR code");
+
+  // Verify link ownership matches Charlie's UID
+  const linkSnap = await db.collection("links").doc(res.body.id).get();
+  assert.equal(linkSnap.data().ownerId, "user_charlie");
+  ok("link ownership accurately references persistent customer UID");
+}
+
+// ------------------------------------------------------------------ 5. Razorpay Auto-Provisioning, Verification & Upgrades
+{
+  const db = createUniversalDb();
+  const testSecret = "rzp_secret_production_test_999";
+  let provisionedPlan = null;
+  let createdSubscription = null;
+
+  const billingHandler = createBillingHandler({
+    getDb: () => db,
+    verify: async (token) => {
+      if (token === "token_dan") return { uid: "user_dan", email: "dan@example.com", name: "Dan" };
+      throw new Error("Invalid token");
+    },
+    env: () => ({
+      RAZORPAY_KEY_ID: "rzp_test_danKey",
+      RAZORPAY_KEY_SECRET: testSecret,
+      // RAZORPAY_PLAN_PRO_MONTHLY intentionally omitted to test auto-provisioning!
+    }),
+    makeStripe: () => ({}),
+    makeRazorpay: () => ({
+      createPlan: async (planArgs) => {
+        provisionedPlan = planArgs;
+        return { id: "plan_auto_pro_monthly_999" };
+      },
+      createSubscription: async (subArgs) => {
+        createdSubscription = subArgs;
+        return { id: "sub_dan_pro_999", short_url: "https://rzp.io/i/danProSub" };
+      },
+      getSubscription: async (id) => ({
+        id,
+        status: "active",
+        current_end: Math.floor(Date.now() / 1000) + 30 * 86400,
+        customer_id: "cust_dan_999",
+      }),
+    }),
+    serverTs: () => new Date(),
+    now: () => Date.now(),
+  });
+
+  // A. Checkout auto-provisions Razorpay plan if not in env
+  let res = await callJson(billingHandler, {
+    method: "POST",
+    headers: { Authorization: "Bearer token_dan" },
+    query: { action: "checkout" },
+    body: { plan: "pro", interval: "monthly", provider: "razorpay" },
+  });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.url, "https://rzp.io/i/danProSub");
+  assert.equal(res.body.subscriptionId, "sub_dan_pro_999");
+  assert.equal(res.body.keyId, "rzp_test_danKey");
+  assert.equal(provisionedPlan.amount, 29900); // 299 INR in paise
+  assert.equal(createdSubscription.planId, "plan_auto_pro_monthly_999");
+  ok("Razorpay checkout auto-provisions plan and returns checkout credentials when env plan unset");
+
+  // B. Verify payment signature: tampered signature rejected
+  res = await callJson(billingHandler, {
+    method: "POST",
+    headers: { Authorization: "Bearer token_dan" },
+    query: { action: "verify-razorpay" },
+    body: {
+      razorpay_payment_id: "pay_test_123",
+      razorpay_subscription_id: "sub_dan_pro_999",
+      razorpay_signature: "tampered_signature_abc",
+      plan: "pro",
+      interval: "monthly",
+    },
+  });
+  assert.equal(res.code, 400);
+  assert.equal(res.body.error, "invalid_signature");
+  ok("client payment verification rejects invalid/tampered cryptographic signature");
+
+  // C. Verify payment signature: valid signature activates Pro plan
+  const validPaymentId = "pay_dan_valid_456";
+  const validSubId = "sub_dan_pro_999";
+  const validSig = crypto.createHmac("sha256", testSecret).update(`${validPaymentId}|${validSubId}`).digest("hex");
+
+  res = await callJson(billingHandler, {
+    method: "POST",
+    headers: { Authorization: "Bearer token_dan" },
+    query: { action: "verify-razorpay" },
+    body: {
+      razorpay_payment_id: validPaymentId,
+      razorpay_subscription_id: validSubId,
+      razorpay_signature: validSig,
+      plan: "pro",
+      interval: "monthly",
+    },
+  });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.plan, "pro");
+  assert.equal(res.body.status, "active");
+  ok("valid payment signature verification activates plan instantly");
+
+  // D. Verify Dan's user document in database now has Pro entitlements
+  const danDoc = (await db.collection("users").doc("user_dan").get()).data();
+  assert.equal(danDoc.plan, "pro");
+  assert.equal(danDoc.planStatus, "active");
+  assert.equal(danDoc.ent.plan, "pro");
+  assert.equal(danDoc.ent.dynamicQrs, 50);
+  assert.equal(danDoc.ent.monthlyScans, 20000);
+  assert.equal(danDoc.ent.password, true);
+  ok("user account document reflects upgraded plan, limits, and entitlements");
+
+  // E. GET /api/billing?action=me reflects Pro plan
+  res = await callJson(billingHandler, {
+    method: "GET",
+    headers: { Authorization: "Bearer token_dan" },
+    query: { action: "me" },
+  });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.plan, "pro");
+  assert.equal(res.body.status, "active");
+  assert.equal(res.body.limits.dynamicQrs, 50);
+  assert.equal(res.body.features.password, true);
+  ok("GET ?action=me immediately reflects active upgraded subscription");
+}
+
 console.log("\nAll production repair & verification tests passed!\n");

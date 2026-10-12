@@ -79,11 +79,15 @@ export function razorpayStateFromSub(sub, env) {
   const found = lookupPlanByProviderId("razorpay", sub.plan_id, env);
   const plan = found?.plan || sub.notes?.plan;
   if (plan !== "pro" && plan !== "business") return null;
-  const endSec = sub.current_end || sub.charge_at || sub.end_at;
+  const interval = found?.interval || sub.notes?.interval || "monthly";
+  let endSec = sub.current_end || sub.charge_at || sub.end_at;
+  if (!endSec && status === "active") {
+    endSec = Math.floor(Date.now() / 1000) + (interval === "yearly" ? 365 : 30) * 86400;
+  }
   return {
     plan,
     planStatus: status,
-    planInterval: found?.interval || sub.notes?.interval || null,
+    planInterval: interval,
     currentPeriodEnd: endSec ? endSec * 1000 : 0,
     cancelAtPeriodEnd: sub.has_scheduled_changes === true || (status === "canceled" && !!endSec),
     planSource: "razorpay",

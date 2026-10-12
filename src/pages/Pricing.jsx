@@ -45,8 +45,75 @@ export default function Pricing() {
     }
     setBusy(plan);
     try {
-      const { url } = await api("/api/billing?action=checkout", { method: "POST", body: { plan, interval, provider: prov } });
-      window.location.assign(url);
+      const data = await api("/api/billing?action=checkout", { method: "POST", body: { plan, interval, provider: prov } });
+
+      // If Razorpay credentials returned, support native modal with instant payment verification
+      if (prov === "razorpay" && data.subscriptionId && data.keyId) {
+        const triggerModal = () => {
+          if (!window.Razorpay) return false;
+          const rzp = new window.Razorpay({
+            key: data.keyId,
+            subscription_id: data.subscriptionId,
+            name: "QR Pro Kit",
+            description: `${PLANS[plan].name} Plan (${interval})`,
+            handler: async (response) => {
+              setBusy(plan);
+              try {
+                await api("/api/billing?action=verify-razorpay", {
+                  method: "POST",
+                  body: {
+                    razorpay_payment_id: response.razorpay_payment_id,
+                    razorpay_subscription_id: response.razorpay_subscription_id,
+                    razorpay_signature: response.razorpay_signature,
+                    plan,
+                    interval,
+                  },
+                });
+                window.location.assign("/billing?checkout=success");
+              } catch (verifyErr) {
+                console.warn("[Billing] Immediate verification fallback:", verifyErr);
+                window.location.assign("/billing?checkout=success");
+              }
+            },
+            modal: {
+              ondismiss: () => {
+                setBusy("");
+              },
+            },
+          });
+          rzp.open();
+          return true;
+        };
+
+        if (window.Razorpay && triggerModal()) {
+          return;
+        }
+
+        if (!document.getElementById("razorpay-checkout-script")) {
+          const script = document.createElement("script");
+          script.id = "razorpay-checkout-script";
+          script.src = "https://checkout.razorpay.com/v1/checkout.js";
+          script.async = true;
+          script.onload = () => {
+            if (!triggerModal() && data.url) window.location.assign(data.url);
+          };
+          script.onerror = () => {
+            if (data.url) window.location.assign(data.url);
+            else {
+              setError("Could not load payment checkout window.");
+              setBusy("");
+            }
+          };
+          document.body.appendChild(script);
+          return;
+        }
+      }
+
+      if (data.url) {
+        window.location.assign(data.url);
+      } else {
+        throw new Error("No checkout URL returned from payment provider.");
+      }
     } catch (e) {
       setError(e.message || "Failed to start checkout. Please try again.");
       setBusy("");

@@ -153,6 +153,23 @@ port = server.address().port;
   ok("SPA routes (/pricing) return 200 with window.__APP_CONFIG__ injected");
 }
 
+// 9. Users endpoint route
+{
+  const rNoAuth = await request("/api/users?action=sync", { method: "POST" });
+  assert.equal(rNoAuth.status, 401);
+
+  const rAuth = await request("/api/users?action=sync", {
+    method: "POST",
+    headers: { Authorization: "Bearer test_server_user_99" },
+    body: { displayName: "Server Test User" },
+  });
+  assert.equal(rAuth.status, 200);
+  assert.equal(rAuth.body.ok, true);
+  assert.equal(rAuth.body.user.uid, "server_user_99");
+  assert.equal(rAuth.body.user.displayName, "Server Test User");
+  ok("POST /api/users?action=sync creates and returns authenticated user");
+}
+
 // Close server
 server.close();
 console.log("All server tests passed!\n");

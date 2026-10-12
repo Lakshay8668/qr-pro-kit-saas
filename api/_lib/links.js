@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { entitlementsFor, PLANS, LIMIT_LABELS } from "../../shared/plans.js";
 import { countLinks } from "./quota.js";
 import { cleanBio, cleanDesign, cleanDestinations, cleanMax, cleanPasswordSpec, isHttpUrl } from "../../shared/linkClean.js";
+import { ensureUser } from "./userStore.js";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const MAX_BULK = 200;
@@ -152,8 +153,7 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       const db = getDb();
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
 
-      const uSnap = await db.collection("users").doc(me.uid).get();
-      const user = uSnap.exists ? uSnap.data() : {};
+      const user = (await ensureUser(db, me, serverTs)) || {};
       if (user.disabled) return json(res, 403, { error: "account_disabled", message: "This account has been disabled." });
       const ent = entitlementsFor(user, now());
 

@@ -70,13 +70,19 @@ export function createStripe({ secret, fetchImpl = fetch }) {
 
 export function createRazorpay({ keyId, keySecret, fetchImpl = fetch }) {
   const auth = "Basic " + Buffer.from(`${keyId}:${keySecret}`).toString("base64");
-  const call = (path, body) =>
+  const call = (path, body, method = "POST") =>
     fetchImpl(`https://api.razorpay.com${path}`, {
-      method: "POST",
+      method,
       headers: { Authorization: auth, "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
+      body: method === "GET" ? undefined : JSON.stringify(body || {}),
     }).then(parse);
   return {
+    createPlan: ({ period, interval = 1, name, amount, currency = "INR", description = "" }) =>
+      call("/v1/plans", {
+        period,
+        interval,
+        item: { name, amount, currency, description },
+      }),
     createSubscription: ({ planId, uid, plan, interval }) =>
       call("/v1/subscriptions", {
         plan_id: planId,
@@ -84,6 +90,7 @@ export function createRazorpay({ keyId, keySecret, fetchImpl = fetch }) {
         customer_notify: 1,
         notes: { uid, plan, interval },
       }),
+    getSubscription: (id) => call(`/v1/subscriptions/${encodeURIComponent(id)}`, null, "GET"),
     cancelAtCycleEnd: (id) => call(`/v1/subscriptions/${encodeURIComponent(id)}/cancel`, { cancel_at_cycle_end: 1 }),
   };
 }
@@ -110,4 +117,11 @@ export function verifyStripeSignature(raw, header, secret, now = Date.now(), tol
 export function verifyRazorpaySignature(raw, header, secret) {
   if (!raw || !header || !secret) return false;
   return safeEq(header, crypto.createHmac("sha256", secret).update(raw).digest("hex"));
+}
+
+/** Razorpay Subscription Checkout Signature: HMAC_SHA256(keySecret, `${payment_id}|${subscription_id}`) in hex */
+export function verifySubscriptionPaymentSignature(paymentId, subscriptionId, signature, secret) {
+  if (!paymentId || !subscriptionId || !signature || !secret) return false;
+  const want = crypto.createHmac("sha256", secret).update(`${paymentId}|${subscriptionId}`).digest("hex");
+  return safeEq(signature, want);
 }

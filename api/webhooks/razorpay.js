@@ -12,7 +12,11 @@ export default async function handler(req, res) {
   if (req.method !== "POST") { res.statusCode = 405; return res.end("method not allowed"); }
   try {
     const raw = await readRaw(req);
+    if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+      console.error("[Razorpay Webhook] RAZORPAY_WEBHOOK_SECRET is not configured in server environment variables.");
+    }
     if (!verifyRazorpaySignature(raw, req.headers["x-razorpay-signature"], process.env.RAZORPAY_WEBHOOK_SECRET)) {
+      console.warn("[Razorpay Webhook] Rejected webhook: signature mismatch or missing secret.");
       res.statusCode = 400;
       return res.end("bad signature");
     }
