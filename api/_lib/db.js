@@ -42,6 +42,8 @@ function merge(target, patch) {
   for (const [k, v] of Object.entries(patch)) {
     if (v?.__inc !== undefined) {
       out[k] = (Number(out[k]) || 0) + v.__inc;
+    } else if (v?.operand !== undefined) {
+      out[k] = (Number(out[k]) || 0) + Number(v.operand);
     } else if (v?._serverTimestamp) {
       out[k] = new Date();
     } else if (isObj(v) && isObj(out[k])) {
@@ -218,7 +220,9 @@ function wrapDocData(data) {
   if (!data || typeof data !== "object") return data;
   const out = { ...data };
   for (const [k, v] of Object.entries(out)) {
-    if (v instanceof Date) {
+    if (v?.operand !== undefined) {
+      out[k] = Number(v.operand) || 0;
+    } else if (v instanceof Date) {
       out[k] = makeTimestamp(v);
     } else if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
       const d = new Date(v);
