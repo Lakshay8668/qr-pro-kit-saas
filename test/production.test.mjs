@@ -612,6 +612,36 @@ console.log("Running production repair & verification tests...");
   assert.equal(res.body.url, "https://rzp.io/i/plan_test_pro_m_real");
   assert.equal(res.body.subscriptionId, "sub_real_plan_test_pro_m_real");
   ok("checkout automatically recovers from invalid configured plan ID using account discovery");
+
+  // C. Test Mode credential prioritization and safe fingerprinting
+  const { getRazorpayCredentials, getSafeCredentialFingerprint } = await import("../api/_lib/providers.js");
+  
+  // SHA-256 fingerprint should never expose secret
+  const fp = getSafeCredentialFingerprint("my_super_secret_key_12345");
+  assert.equal(fp.length, 8);
+  assert.ok(!fp.includes("secret"));
+
+  // Only live key configured
+  const liveOnly = getRazorpayCredentials({
+    RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
+    RAZORPAY_KEY_SECRET: "live_secret_value_12345",
+  });
+  assert.equal(liveOnly.keyMode, "live");
+  assert.equal(liveOnly.keyId, "rzp_live_1234567890abcdef");
+  assert.equal(liveOnly.keySourceVar, "RAZORPAY_KEY_ID");
+
+  // Both live and test keys configured: MUST prioritize test key!
+  const liveAndTest = getRazorpayCredentials({
+    RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
+    RAZORPAY_KEY_SECRET: "live_secret_value_12345",
+    RAZORPAY_TEST_KEY_ID: "rzp_test_testkey987654",
+    RAZORPAY_TEST_KEY_SECRET: "test_secret_value_98765",
+  });
+  assert.equal(liveAndTest.keyMode, "test");
+  assert.equal(liveAndTest.keyId, "rzp_test_testkey987654");
+  assert.equal(liveAndTest.keySecret, "test_secret_value_98765");
+  assert.equal(liveAndTest.keySourceVar, "RAZORPAY_TEST_KEY_ID");
+  ok("getRazorpayCredentials safely prioritizes Test Mode credentials over Live credentials");
 }
 
 console.log("\nAll production repair & verification tests passed!\n");

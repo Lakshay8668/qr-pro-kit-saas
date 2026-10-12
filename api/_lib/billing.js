@@ -13,6 +13,8 @@ import {
   planEnvKey,
   cleanPlanId,
   maskPlanId,
+  getSafeCredentialFingerprint,
+  getRazorpayCredentials,
   getRazorpayPlanEnvConfig,
   verifySubscriptionPaymentSignature,
 } from "./providers.js";
@@ -27,10 +29,13 @@ const json = (res, code, body) => {
   res.end(JSON.stringify(body));
 };
 
-export const providersEnabled = (env) => ({
-  stripe: !!env.STRIPE_SECRET_KEY,
-  razorpay: !!(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET),
-});
+export const providersEnabled = (env) => {
+  const creds = getRazorpayCredentials(env);
+  return {
+    stripe: !!env.STRIPE_SECRET_KEY,
+    razorpay: !!(creds.keyId && creds.keySecret),
+  };
+};
 
 export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazorpay, now = () => Date.now(), serverTs }) {
   const originOf = (req) => {
@@ -53,23 +58,64 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
       // ------------------------------------------------------------------ safe diagnostic report
       if (req.method === "GET" && action === "diagnose") {
         const e = env();
-        const rzpConfigured = !!(e.RAZORPAY_KEY_ID && e.RAZORPAY_KEY_SECRET);
+        const creds = getRazorpayCredentials(e);
         const stripeConfigured = !!e.STRIPE_SECRET_KEY;
-        const keyId = cleanPlanId(e.RAZORPAY_KEY_ID);
-        const keyMode = keyId.startsWith("rzp_test_") ? "test" : keyId.startsWith("rzp_live_") ? "live" : "unknown";
+        const rzpConfigured = !!(creds.keyId && creds.keySecret);
+
+        // Scan all env vars in Railway runtime matching RAZORPAY or RZP
+        const detectedVars = Object.keys(e)
+          .filter((k) => /^(RAZORPAY|RZP|VITE_RAZORPAY)/i.test(k))
+          .sort()
+          .map((k) => {
+            const val = cleanPlanId(e[k]);
+            const isSecret = /secret/i.test(k);
+            return {
+              name: k,
+              isSet: !!val,
+              length: val ? val.length : 0,
+              preview: isSecret ? "(masked secret)" : maskPlanId(val),
+              fingerprint: getSafeCredentialFingerprint(val),
+              mode: val.startsWith("rzp_test_")
+                ? "test"
+                : val.startsWith("rzp_live_")
+                ? "live"
+                : val.startsWith("plan_")
+                ? "plan"
+                : isSecret
+                ? "secret"
+                : "unknown",
+            };
+          });
 
         const diag = {
           timestamp: new Date().toISOString(),
+          server: {
+            nodeVersion: process.version,
+            uptimeSeconds: Math.round(process.uptime()),
+          },
           providers: {
             stripe: stripeConfigured,
             razorpay: rzpConfigured,
           },
           razorpay: {
             configured: rzpConfigured,
-            keyIdPreview: maskPlanId(keyId),
-            keyMode,
-            keySecretConfigured: !!e.RAZORPAY_KEY_SECRET,
-            webhookSecretConfigured: !!e.RAZORPAY_WEBHOOK_SECRET,
+            keyIdPreview: maskPlanId(creds.keyId),
+            keyMode: creds.keyMode,
+            keySecretConfigured: !!creds.keySecret,
+            webhookSecretConfigured: !!creds.webhookSecret,
+            activeCredentials: {
+              keyIdPreview: maskPlanId(creds.keyId),
+              keyIdSourceVar: creds.keySourceVar,
+              keyIdFingerprint: getSafeCredentialFingerprint(creds.keyId),
+              keyMode: creds.keyMode,
+              keySecretSourceVar: creds.secretSourceVar,
+              keySecretConfigured: !!creds.keySecret,
+              keySecretFingerprint: getSafeCredentialFingerprint(creds.keySecret),
+              webhookSecretSourceVar: creds.webhookSecretSourceVar,
+              webhookSecretConfigured: !!creds.webhookSecret,
+              webhookSecretFingerprint: getSafeCredentialFingerprint(creds.webhookSecret),
+            },
+            environmentVariablesFound: detectedVars,
             authStatus: "unchecked",
             accountPlans: [],
             configuredPlans: {},
@@ -78,7 +124,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         };
 
         if (rzpConfigured) {
-          const rzp = makeRazorpay();
+          const rzp = makeRazorpay(creds);
           try {
             const listRes = await rzp.listPlans(50);
             diag.razorpay.authStatus = "authenticated";
@@ -157,6 +203,18 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
               diag.razorpay.configuredPlans[planKey] = info;
             }
           }
+        }
+
+        // Add high-level recommendations
+        if (creds.keyMode === "live" && !creds.hasTestCredentials) {
+          diag.razorpay.recommendations.unshift(
+            `Railway is currently running with a LIVE Razorpay Key (${maskPlanId(creds.keyId)}). ` +
+            `If you want to use Test Mode with Test Mode plans, set RAZORPAY_TEST_KEY_ID (or replace RAZORPAY_KEY_ID) with your rzp_test_... key and RAZORPAY_TEST_KEY_SECRET in Railway variables.`
+          );
+        } else if (creds.keyMode === "test") {
+          diag.razorpay.recommendations.unshift(
+            `Razorpay is running in TEST Mode using ${creds.keySourceVar} (${maskPlanId(creds.keyId)}). No real charges will be incurred.`
+          );
         }
 
         return json(res, 200, diag);
@@ -244,9 +302,10 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         }
 
         // Razorpay checkout
+        const creds = getRazorpayCredentials(e);
         const cfg = getRazorpayPlanEnvConfig(e, plan, interval);
         let providerPlanId = cfg.value;
-        const rzp = makeRazorpay();
+        const rzp = makeRazorpay(creds);
 
         // 1. If not configured in env, attempt auto-discovery from user's live Razorpay account
         if (!providerPlanId) {
@@ -341,7 +400,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
                 : "No plans found in this Razorpay account";
 
               const errMsg = `The configured Razorpay plan ID for ${PLANS[plan].name} (${interval}) is invalid. ` +
-                `Railway variable ${cfg.key} has "${maskPlanId(providerPlanId)}", which was not found in your Razorpay account (${maskPlanId(e.RAZORPAY_KEY_ID)}). ` +
+                `Railway variable ${cfg.key} has "${maskPlanId(providerPlanId)}", which was not found in your Razorpay account (${maskPlanId(creds.keyId)} [${creds.keyMode}]). ` +
                 `Available plans in your account: [${summary}]. ` +
                 `Please update ${cfg.key} in Railway to match your Razorpay plan ID.`;
 
@@ -351,6 +410,8 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
                 message: errMsg,
                 configuredVar: cfg.key,
                 configuredId: maskPlanId(providerPlanId),
+                keyMode: creds.keyMode,
+                keyIdPreview: maskPlanId(creds.keyId),
                 availablePlans: items.map((p) => ({ id: p.id, name: p.item?.name, amount: (p.item?.amount || 0) / 100, period: p.period })),
               });
             }
@@ -363,7 +424,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         return json(res, 200, {
           url: checkoutUrl,
           subscriptionId: s.id,
-          keyId: e.RAZORPAY_KEY_ID,
+          keyId: creds.keyId,
           plan,
           interval,
         });
@@ -381,9 +442,10 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
           return json(res, 400, { error: "bad_request", message: "Missing payment verification parameters." });
         }
 
-        const secret = e.RAZORPAY_KEY_SECRET;
+        const creds = getRazorpayCredentials(e);
+        const secret = creds.keySecret;
         if (!secret) {
-          return json(res, 500, { error: "not_configured", message: "RAZORPAY_KEY_SECRET is not configured." });
+          return json(res, 500, { error: "not_configured", message: "Razorpay Key Secret is not configured." });
         }
 
         if (!verifySubscriptionPaymentSignature(paymentId, subscriptionId, signature, secret)) {
@@ -393,7 +455,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         const targetPlan = isPaidPlan(plan) ? plan : "pro";
         let subDetails = null;
         try {
-          subDetails = await makeRazorpay().getSubscription(subscriptionId);
+          subDetails = await makeRazorpay(creds).getSubscription(subscriptionId);
         } catch (subErr) {
           console.warn("[Billing] Could not fetch subscription from Razorpay:", subErr.message);
         }

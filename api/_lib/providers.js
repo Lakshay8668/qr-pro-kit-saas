@@ -17,6 +17,182 @@ export function maskPlanId(id) {
   return `${s.slice(0, 8)}...${s.slice(-4)} (${s.length} chars)`;
 }
 
+/** Safe SHA-256 fingerprint (never prints secret; returns 8 hex characters). */
+export function getSafeCredentialFingerprint(val) {
+  if (!val || typeof val !== "string") return "(unset)";
+  const clean = cleanPlanId(val);
+  if (!clean) return "(unset)";
+  return crypto.createHash("sha256").update(clean).digest("hex").slice(0, 8);
+}
+
+/** Resolves Razorpay credentials with smart Test Mode prioritization and alias variable discovery. */
+export function getRazorpayCredentials(env = process.env) {
+  const e = env || {};
+
+  // 1. Explicit test key candidates
+  const testKeyNames = [
+    "RAZORPAY_TEST_KEY_ID",
+    "RAZORPAY_KEY_ID_TEST",
+    "RZP_TEST_KEY_ID",
+    "RAZORPAY_TEST_ID",
+  ];
+  let testKey = "";
+  let testKeyVar = "";
+  for (const k of testKeyNames) {
+    const val = cleanPlanId(e[k]);
+    if (val) {
+      testKey = val;
+      testKeyVar = k;
+      break;
+    }
+  }
+
+  // 2. Standard key candidates
+  const stdKeyNames = [
+    "RAZORPAY_KEY_ID",
+    "RZP_KEY_ID",
+    "RAZORPAY_ID",
+    "RAZORPAY_API_KEY",
+  ];
+  let stdKey = "";
+  let stdKeyVar = "";
+  for (const k of stdKeyNames) {
+    const val = cleanPlanId(e[k]);
+    if (val) {
+      stdKey = val;
+      stdKeyVar = k;
+      break;
+    }
+  }
+
+  // 3. Auto-scan env for any variable holding an rzp_test_ key if not yet found
+  let discoveredTestKey = "";
+  let discoveredTestKeyVar = "";
+  if (!testKey && (!stdKey || !stdKey.startsWith("rzp_test_"))) {
+    for (const [k, v] of Object.entries(e)) {
+      if (/^(RAZORPAY|RZP)/i.test(k) && typeof v === "string") {
+        const cleaned = cleanPlanId(v);
+        if (cleaned.startsWith("rzp_test_")) {
+          discoveredTestKey = cleaned;
+          discoveredTestKeyVar = k;
+          break;
+        }
+      }
+    }
+  }
+
+  const effectiveTestKey = testKey || discoveredTestKey;
+  const effectiveTestKeyVar = testKeyVar || discoveredTestKeyVar;
+
+  // 4. Test secret candidates
+  const testSecretNames = [
+    "RAZORPAY_TEST_KEY_SECRET",
+    "RAZORPAY_KEY_SECRET_TEST",
+    "RAZORPAY_TEST_SECRET",
+    "RZP_TEST_KEY_SECRET",
+    "RZP_TEST_SECRET",
+  ];
+  let testSecret = "";
+  let testSecretVar = "";
+  for (const k of testSecretNames) {
+    const val = cleanPlanId(e[k]);
+    if (val) {
+      testSecret = val;
+      testSecretVar = k;
+      break;
+    }
+  }
+
+  // 5. Standard secret candidates
+  const stdSecretNames = [
+    "RAZORPAY_KEY_SECRET",
+    "RZP_KEY_SECRET",
+    "RAZORPAY_SECRET",
+    "RAZORPAY_API_SECRET",
+  ];
+  let stdSecret = "";
+  let stdSecretVar = "";
+  for (const k of stdSecretNames) {
+    const val = cleanPlanId(e[k]);
+    if (val) {
+      stdSecret = val;
+      stdSecretVar = k;
+      break;
+    }
+  }
+
+  // Auto-scan env for test secret if not found
+  if (!testSecret) {
+    for (const [k, v] of Object.entries(e)) {
+      if (/^(RAZORPAY|RZP).*test.*secret/i.test(k) && typeof v === "string") {
+        const cleaned = cleanPlanId(v);
+        if (cleaned) {
+          testSecret = cleaned;
+          testSecretVar = k;
+          break;
+        }
+      }
+    }
+  }
+
+  // 6. Webhook secret candidates
+  const webhookSecretNames = [
+    "RAZORPAY_WEBHOOK_SECRET",
+    "RAZORPAY_TEST_WEBHOOK_SECRET",
+    "RZP_WEBHOOK_SECRET",
+    "RZP_TEST_WEBHOOK_SECRET",
+  ];
+  let webhookSecret = "";
+  let webhookSecretVar = "";
+  for (const k of webhookSecretNames) {
+    const val = cleanPlanId(e[k]);
+    if (val) {
+      webhookSecret = val;
+      webhookSecretVar = k;
+      break;
+    }
+  }
+
+  // Mode resolution:
+  // If effectiveTestKey is present, PREFER test credentials
+  let activeKey = "";
+  let activeKeyVar = "";
+  let activeSecret = "";
+  let activeSecretVar = "";
+
+  if (effectiveTestKey) {
+    activeKey = effectiveTestKey;
+    activeKeyVar = effectiveTestKeyVar;
+    activeSecret = testSecret || stdSecret;
+    activeSecretVar = testSecret ? testSecretVar : stdSecretVar;
+  } else if (stdKey) {
+    activeKey = stdKey;
+    activeKeyVar = stdKeyVar;
+    activeSecret = stdSecret || testSecret;
+    activeSecretVar = stdSecret ? stdSecretVar : testSecretVar;
+  }
+
+  const keyMode = activeKey.startsWith("rzp_test_")
+    ? "test"
+    : activeKey.startsWith("rzp_live_")
+    ? "live"
+    : activeKey
+    ? "unknown"
+    : "unset";
+
+  return {
+    keyId: activeKey,
+    keySecret: activeSecret,
+    webhookSecret,
+    keyMode,
+    keySourceVar: activeKeyVar,
+    secretSourceVar: activeSecretVar,
+    webhookSecretSourceVar: webhookSecretVar,
+    hasTestCredentials: !!effectiveTestKey,
+    hasLiveCredentials: !!(stdKey && stdKey.startsWith("rzp_live_")),
+  };
+}
+
 /** Stripe wants application/x-www-form-urlencoded with bracketed nesting: a[b]=1&items[0][price]=x */
 export function formEncode(obj, prefix = "", out = []) {
   Object.entries(obj).forEach(([k, v]) => {
@@ -40,8 +216,13 @@ export function getRazorpayPlanEnvConfig(env, plan, interval) {
   const primaryKey = `RAZORPAY_PLAN_${p}_${i}`;
   const candidates = [
     primaryKey,
+    `RAZORPAY_TEST_PLAN_${p}_${i}`,
+    `RAZORPAY_PLAN_${p}_${i}_TEST`,
     `RAZORPAY_PLAN_${p}`,
+    `RAZORPAY_TEST_PLAN_${p}`,
+    `RAZORPAY_PLAN_${p}_TEST`,
     `RAZORPAY_${p}_${i}`,
+    `RAZORPAY_TEST_${p}_${i}`,
     `RAZORPAY_PLAN_ID_${p}_${i}`,
     `RAZORPAY_PLAN_ID_${p}`,
   ];
@@ -122,6 +303,9 @@ export function createRazorpay({ keyId, keySecret, fetchImpl = fetch }) {
       body: method === "GET" ? undefined : JSON.stringify(body || {}),
     }).then(parse);
   return {
+    keyId: cleanKey,
+    keySecret: cleanSecret,
+    keyMode: cleanKey.startsWith("rzp_test_") ? "test" : cleanKey.startsWith("rzp_live_") ? "live" : cleanKey ? "unknown" : "unset",
     getPlan: (id) => call(`/v1/plans/${encodeURIComponent(cleanPlanId(id))}`, null, "GET"),
     listPlans: (count = 50) => call(`/v1/plans?count=${count}`, null, "GET"),
     createPlan: ({ period, interval = 1, name, amount, currency = "INR", description = "" }) =>

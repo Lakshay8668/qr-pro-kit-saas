@@ -2,7 +2,7 @@
 // Events to enable: subscription.activated, subscription.charged, subscription.pending,
 //                   subscription.halted, subscription.cancelled, subscription.completed, subscription.updated
 import { readRaw } from "../_lib/raw.js";
-import { verifyRazorpaySignature } from "../_lib/providers.js";
+import { verifyRazorpaySignature, getRazorpayCredentials } from "../_lib/providers.js";
 import { createSubscriptionHandlers } from "../_lib/subscriptions.js";
 import { getDb, serverTs } from "../_lib/firebaseAdmin.js";
 
@@ -12,10 +12,12 @@ export default async function handler(req, res) {
   if (req.method !== "POST") { res.statusCode = 405; return res.end("method not allowed"); }
   try {
     const raw = await readRaw(req);
-    if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+    const creds = getRazorpayCredentials(process.env);
+    const webhookSecret = creds.webhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!webhookSecret) {
       console.error("[Razorpay Webhook] RAZORPAY_WEBHOOK_SECRET is not configured in server environment variables.");
     }
-    if (!verifyRazorpaySignature(raw, req.headers["x-razorpay-signature"], process.env.RAZORPAY_WEBHOOK_SECRET)) {
+    if (!verifyRazorpaySignature(raw, req.headers["x-razorpay-signature"], webhookSecret)) {
       console.warn("[Razorpay Webhook] Rejected webhook: signature mismatch or missing secret.");
       res.statusCode = 400;
       return res.end("bad signature");
