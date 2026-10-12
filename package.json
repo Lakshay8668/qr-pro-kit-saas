@@ -8,12 +8,13 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.js",
-    "test": "node test/handler.test.mjs && node test/admin.test.mjs && node test/billing.test.mjs && node test/quota.test.mjs && node test/server.test.mjs"
+    "test": "node test/handler.test.mjs && node test/admin.test.mjs && node test/billing.test.mjs && node test/quota.test.mjs && node test/server.test.mjs && node test/production.test.mjs"
   },
   "dependencies": {
     "firebase": "^12.4.0",
     "firebase-admin": "^13.0.0",
     "jszip": "^3.10.1",
+    "pg": "^8.23.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

@@ -1,9 +1,10 @@
-// api/links.js — creates links with plan-limit enforcement (see api/_lib/links.js).
+// api/links.js — creates & manages links with plan-limit enforcement.
 import { createLinksHandler } from "./_lib/links.js";
-import { getDb, adminAuth, serverTs } from "./_lib/firebaseAdmin.js";
+import { getDb, serverTs } from "./_lib/firebaseAdmin.js";
+import { verifyToken } from "./_lib/auth.js";
 
 export default createLinksHandler({
   getDb,
   serverTs,
-  verify: (token) => adminAuth().verifyIdToken(token, true),
+  verify: verifyToken,
 });

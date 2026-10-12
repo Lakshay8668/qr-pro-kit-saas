@@ -71,7 +71,7 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
 
   return async function handler(req, res) {
     try {
-      const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      const token = String(req.headers.authorization || req.headers.Authorization || "").replace(/^Bearer\s+/i, "");
       if (!token) return json(res, 401, { error: "sign_in_required" });
       let me;
       try {

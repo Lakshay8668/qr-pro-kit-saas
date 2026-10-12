@@ -1,15 +1,10 @@
-// src/lib/links.js  (v9)
-// v9: links are CREATED by the server (api/links.js) so plan limits can't be bypassed from the browser.
-// The browser still edits / deletes its own links straight in Firestore (rules gate the plan-only features).
-// Scans are served by the Vercel function (api/q/[id].js); the browser never writes scan data.
-//
-// links/{id}  { kind: "redirect"|"bio"|"static", type, destination, destinations{ios,android},
-//               bio{title,description,accent,avatar,links[]}, password{salt,hash,iter},
-//               label, scans, active, expiresAt, maxScans, design, ownerId, createdAt, lastScannedAt }
-// links/{id}/scans  { ts, ev: "scan"|"click", device, os, browser, lang, country, region, city, vid, target? }
+// src/lib/links.js  (v9 production repair)
+// Links and scans are served and mutated through the secure backend API (/api/links),
+// with plan limit enforcement and persistent storage in PostgreSQL / durable database.
+// Real-time Firestore snapshot listeners are attached as progressive enhancements if Firestore is active.
 
 import {
-  collection, doc, getDocs, updateDoc, deleteDoc, onSnapshot,
+  collection, doc, getDocs, onSnapshot,
   query, where, orderBy, limit, writeBatch, Timestamp,
 } from "firebase/firestore";
 import { db, getFirestoreStatus, setFirestoreUnavailable, setFirestoreAvailable } from "./firebase";
@@ -39,7 +34,7 @@ function toServerLink({
 }) {
   return {
     kind, destination, label, type, payload, bio, password, design, destinations,
-    expiresAt: expiresAt ? expiresAt.getTime() : null,
+    expiresAt: expiresAt ? (expiresAt instanceof Date ? expiresAt.getTime() : expiresAt) : null,
     maxScans: maxScans || null,
   };
 }
@@ -59,6 +54,12 @@ export async function createLinks(rows) {
   return ids;
 }
 
+// Fetch all links owned by the signed-in user from the backend API
+export async function fetchMyLinks() {
+  const res = await api("/api/links?action=list");
+  return res.links || [];
+}
+
 /** Patch any of: label, destination, destinations, bio, password ({salt,hash,iter}|null), active, expiresAt, maxScans, design */
 export async function updateLink(id, patch = {}) {
   const out = {};
@@ -76,135 +77,103 @@ export async function updateLink(id, patch = {}) {
     out.password = p && p.hash ? { salt: p.salt, hash: p.hash, iter: p.iter } : null;
   }
   if ("active" in patch) out.active = !!patch.active;
-  if ("expiresAt" in patch) out.expiresAt = toTs(patch.expiresAt);
+  if ("expiresAt" in patch) {
+    out.expiresAt = patch.expiresAt instanceof Date ? patch.expiresAt.getTime() : patch.expiresAt;
+  }
   if ("maxScans" in patch) out.maxScans = cleanMax(patch.maxScans);
   if ("design" in patch) out.design = cleanDesign(patch.design);
   if (!Object.keys(out).length) return;
-  if (!db) throw new Error("Cloud Firestore is not available. Configure Firebase credentials to update dynamic links.");
-  try {
-    await updateDoc(doc(db, "links", id), out);
-  } catch (e) {
-    if (e?.code === "permission-denied" && ("password" in out || "destinations" in out)) {
-      throw new Error("Password protection and per-device redirects are part of the Pro plan. Upgrade to use them.");
-    }
-    throw e;
-  }
+
+  return await api("/api/links?action=update", {
+    method: "POST",
+    body: { id, patch: out },
+  });
 }
 
 export const updateDestination = (id, destination) => updateLink(id, { destination });
 export const renameLink = (id, label) => updateLink(id, { label });
 
 export async function deleteLink(id) {
-  if (!db) throw new Error("Cloud Firestore is not available. Configure Firebase credentials to delete dynamic links.");
-  const scansCol = collection(db, "links", id, "scans");
-  for (let i = 0; i < 25; i++) {
-    const snap = await getDocs(query(scansCol, limit(400)));
-    if (snap.empty) break;
-    const batch = writeBatch(db);
-    snap.docs.forEach((d) => batch.delete(d.ref));
-    await batch.commit();
-  }
-  await deleteDoc(doc(db, "links", id));
+  return await api("/api/links?action=delete", {
+    method: "POST",
+    body: { id },
+  });
 }
 
 export function subscribeToMyLinks(ownerId, callback, onError) {
-  const status = getFirestoreStatus();
+  let active = true;
+
+  const loadFromApi = async () => {
+    try {
+      const links = await fetchMyLinks();
+      if (active) callback(links);
+    } catch (err) {
+      if (active && onError) onError(err);
+    }
+  };
+
+  // Immediate fetch via API
+  loadFromApi();
+
+  // Polling fallback to keep dashboard fresh across devices / scans
+  const pollInterval = setInterval(loadFromApi, 8000);
+
+  // Firestore real-time listener if available
+  let unsubFirestore = () => {};
   const col = getLinksCol();
-  if (!db || !col || status.available === false) {
-    if (onError) onError(new Error(status.error || "Cloud Firestore is not available."));
-    callback([]);
-    return () => {};
-  }
-
-  let unsub = () => {};
-  try {
-    const q = query(col, where("ownerId", "==", ownerId));
-    unsub = onSnapshot(
-      q,
-      (snap) => {
-        setFirestoreAvailable();
-        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        rows.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-        callback(rows);
-      },
-      (err) => {
-        const msg = err?.message || "";
-        const code = err?.code || "";
-        if (
-          code === "not-found" ||
-          code === "failed-precondition" ||
-          code === "unavailable" ||
-          msg.includes("not found") ||
-          msg.includes("does not exist") ||
-          msg.includes("(default)")
-        ) {
-          setFirestoreUnavailable(err);
+  if (db && col && getFirestoreStatus().available !== false) {
+    try {
+      const q = query(col, where("ownerId", "==", ownerId));
+      unsubFirestore = onSnapshot(
+        q,
+        (snap) => {
+          if (!active) return;
+          setFirestoreAvailable();
+          const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          rows.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+          callback(rows);
+        },
+        () => {
+          // Silent fallback to polling if Firestore is not provisioned
         }
-        if (onError) onError(err);
-      }
-    );
-  } catch (err) {
-    setFirestoreUnavailable(err);
-    if (onError) onError(err);
-    callback([]);
-    return () => {};
+      );
+    } catch {
+      // Ignored: API polling handles updates
+    }
   }
 
-  return unsub;
+  return () => {
+    active = false;
+    clearInterval(pollInterval);
+    unsubFirestore();
+  };
 }
 
 export function subscribeToScans(id, callback, onError) {
-  const status = getFirestoreStatus();
-  if (!db || status.available === false) {
-    if (onError) onError(new Error(status.error || "Cloud Firestore is not available."));
-    callback([]);
-    return () => {};
-  }
+  let active = true;
 
-  let unsub = () => {};
-  try {
-    const q = query(collection(db, "links", id, "scans"), orderBy("ts", "desc"), limit(2000));
-    unsub = onSnapshot(
-      q,
-      (snap) => {
-        setFirestoreAvailable();
-        callback(
-          snap.docs.map((d) => {
-            const v = d.data();
-            return { id: d.id, ...v, t: v.ts?.toMillis?.() ?? Date.now() };
-          })
-        );
-      },
-      (err) => {
-        const msg = err?.message || "";
-        const code = err?.code || "";
-        if (
-          code === "not-found" ||
-          code === "failed-precondition" ||
-          code === "unavailable" ||
-          msg.includes("not found") ||
-          msg.includes("does not exist") ||
-          msg.includes("(default)")
-        ) {
-          setFirestoreUnavailable(err);
-        }
-        if (onError) onError(err);
-      }
-    );
-  } catch (err) {
-    setFirestoreUnavailable(err);
-    if (onError) onError(err);
-    callback([]);
-    return () => {};
-  }
+  const loadScans = async () => {
+    try {
+      const res = await api(`/api/links?action=scans&id=${encodeURIComponent(id)}`);
+      if (active) callback(res.scans || []);
+    } catch (err) {
+      if (active && onError) onError(err);
+    }
+  };
 
-  return unsub;
+  loadScans();
+  const timer = setInterval(loadScans, 6000);
+
+  return () => {
+    active = false;
+    clearInterval(timer);
+  };
 }
 
 export function linkStatus(link) {
   if (link.kind === "static") return { id: "static", label: "Static" };
   if (link.active === false) return { id: "paused", label: "Paused" };
-  const exp = link.expiresAt?.toMillis?.();
+  const exp = link.expiresAt?.toMillis ? link.expiresAt.toMillis() : link.expiresAt ? new Date(link.expiresAt).getTime() : 0;
   if (exp && exp < Date.now()) return { id: "expired", label: "Expired" };
   if (link.maxScans && (link.scans || 0) >= link.maxScans) return { id: "limit", label: "Limit reached" };
   return { id: "active", label: "Active" };

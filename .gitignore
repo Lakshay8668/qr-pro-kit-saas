@@ -9,3 +9,4 @@ firebase-admin*.json
 *.pem
 *.key
 .vercel
+data/

@@ -131,8 +131,16 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
 
   return async function handler(req, res) {
     try {
-      if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
-      const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      const action = String(req.query?.action || "");
+      if (req.method === "GET") {
+        if (!["list", "get", "scans"].includes(action)) {
+          return json(res, 405, { error: "method_not_allowed" });
+        }
+      } else if (req.method !== "POST") {
+        return json(res, 405, { error: "method_not_allowed" });
+      }
+
+      const token = String(req.headers.authorization || req.headers.Authorization || "").replace(/^Bearer\s+/i, "");
       if (!token) return json(res, 401, { error: "sign_in_required", message: "Please sign in first." });
       let me;
       try {
@@ -142,7 +150,6 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       }
 
       const db = getDb();
-      const action = String(req.query?.action || "");
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
 
       const uSnap = await db.collection("users").doc(me.uid).get();
@@ -150,7 +157,46 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       if (user.disabled) return json(res, 403, { error: "account_disabled", message: "This account has been disabled." });
       const ent = entitlementsFor(user, now());
 
-      if (action === "create") {
+      // ------------------------------------------------------------- GET: list links
+      if (req.method === "GET" && action === "list") {
+        const snap = await db.collection("links").where("ownerId", "==", me.uid).get();
+        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        rows.sort((a, b) => {
+          const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return tb - ta;
+        });
+        return json(res, 200, { links: rows });
+      }
+
+      // ------------------------------------------------------------- GET: single link
+      if (req.method === "GET" && action === "get") {
+        const id = String(req.query?.id || "");
+        if (!id) throw new Fail(400, "bad_request", "Missing link ID.");
+        const snap = await db.collection("links").doc(id).get();
+        if (!snap.exists) throw new Fail(404, "not_found", "Link not found.");
+        const data = snap.data();
+        if (data.ownerId !== me.uid) throw new Fail(403, "forbidden", "Access denied.");
+        return json(res, 200, { link: { id: snap.id, ...data } });
+      }
+
+      // ------------------------------------------------------------- GET: scan history
+      if (req.method === "GET" && action === "scans") {
+        const id = String(req.query?.id || "");
+        if (!id) throw new Fail(400, "bad_request", "Missing link ID.");
+        const snap = await db.collection("links").doc(id).get();
+        if (!snap.exists) throw new Fail(404, "not_found", "Link not found.");
+        if (snap.data().ownerId !== me.uid) throw new Fail(403, "forbidden", "Access denied.");
+        const scansSnap = await db.collection("links").doc(id).collection("scans").orderBy("ts", "desc").limit(2000).get();
+        const rows = (scansSnap.docs || []).map((d) => {
+          const v = d.data();
+          return { id: d.id, ...v, t: v.ts?.toMillis ? v.ts.toMillis() : typeof v.ts === "number" ? v.ts : Date.now() };
+        });
+        return json(res, 200, { scans: rows });
+      }
+
+      // ------------------------------------------------------------- POST: create link
+      if (req.method === "POST" && action === "create") {
         const doc = buildDoc(body.link, me.uid, ent);
         const used = await countLinks(db, me.uid);
         const key = doc.kind === "static" ? "staticQrs" : "dynamicQrs";
@@ -158,7 +204,8 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         return json(res, 200, { id: await writeOne(db, doc) });
       }
 
-      if (action === "create-many") {
+      // ------------------------------------------------------------- POST: bulk create
+      if (req.method === "POST" && action === "create-many") {
         locked(ent, "bulk", "Bulk creation");
         const items = Array.isArray(body.items) ? body.items : [];
         if (!items.length) throw new Fail(400, "bad_request", "No rows to create.");
@@ -173,6 +220,72 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
           throw limitFail(ent, "dynamicQrs", used.dynamicQrs, ` This batch needs ${docs.length} but only ${left} are left.`);
         }
         return json(res, 200, { ids: await writeMany(db, docs) });
+      }
+
+      // ------------------------------------------------------------- POST: update link
+      if (req.method === "POST" && action === "update") {
+        const id = String(body.id || req.query?.id || "");
+        if (!id) throw new Fail(400, "bad_request", "Missing link ID.");
+        const ref = db.collection("links").doc(id);
+        const snap = await ref.get();
+        if (!snap.exists) throw new Fail(404, "not_found", "Link not found.");
+        const cur = snap.data();
+        if (cur.ownerId !== me.uid) throw new Fail(403, "forbidden", "Access denied.");
+
+        const patch = body.patch || {};
+        const out = {};
+        if ("label" in patch) out.label = String(patch.label || "").trim().slice(0, 120) || "Untitled";
+        if ("destination" in patch) {
+          const dest = String(patch.destination || "").trim();
+          if (!isHttpUrl(dest)) throw new Fail(400, "bad_request", "Destination must be a valid http or https URL.");
+          out.destination = dest;
+        }
+        if ("destinations" in patch) {
+          const cd = cleanDestinations(patch.destinations);
+          if (cd) locked(ent, "deviceTargeting", "Per-device redirects");
+          out.destinations = cd;
+        }
+        if ("bio" in patch) out.bio = cleanBio(patch.bio);
+        if ("payload" in patch) out.payload = String(patch.payload || "").slice(0, 4000);
+        if ("password" in patch) {
+          const p = cleanPasswordSpec(patch.password);
+          if (p) locked(ent, "password", "Password protection");
+          out.password = p;
+        }
+        if ("active" in patch) out.active = Boolean(patch.active);
+        if ("expiresAt" in patch) {
+          const ms = patch.expiresAt ? new Date(patch.expiresAt).getTime() : null;
+          out.expiresAt = ms ? new Date(ms) : null;
+        }
+        if ("maxScans" in patch) out.maxScans = cleanMax(patch.maxScans);
+        if ("design" in patch) out.design = cleanDesign(patch.design);
+
+        await ref.update(out);
+        return json(res, 200, { ok: true, id });
+      }
+
+      // ------------------------------------------------------------- POST: delete link
+      if (req.method === "POST" && action === "delete") {
+        const id = String(body.id || req.query?.id || "");
+        if (!id) throw new Fail(400, "bad_request", "Missing link ID.");
+        const ref = db.collection("links").doc(id);
+        const snap = await ref.get();
+        if (!snap.exists) return json(res, 200, { ok: true });
+        const cur = snap.data();
+        if (cur.ownerId !== me.uid) throw new Fail(403, "forbidden", "Access denied.");
+
+        try {
+          const scansRef = db.collection("links").doc(id).collection("scans");
+          const scansSnap = await scansRef.get();
+          if (scansSnap.docs?.length) {
+            const batch = db.batch();
+            scansSnap.docs.forEach((d) => batch.delete(d.ref));
+            await batch.commit();
+          }
+        } catch {}
+
+        await ref.delete();
+        return json(res, 200, { ok: true, id });
       }
 
       return json(res, 400, { error: "unknown_action" });

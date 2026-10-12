@@ -40,7 +40,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
 
       if (req.method === "GET" && action === "config") return json(res, 200, { providers: providersEnabled(env()) });
 
-      const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+      const token = String(req.headers.authorization || req.headers.Authorization || "").replace(/^Bearer\s+/i, "");
       if (!token) return json(res, 401, { error: "sign_in_required", message: "Please sign in first." });
       let me;
       try {

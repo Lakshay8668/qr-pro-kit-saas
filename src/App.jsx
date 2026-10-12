@@ -502,18 +502,49 @@ export default function App() {
             </button>
           </div>
           {payload && (
-            <div className="payload-row">
-              <p className="payload">{payload}</p>
-              <div style={{ whiteSpace: "nowrap" }}>
-                {createdId && !savedStatic && (
-                  <a className="dash-btn" href={payload} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
-                    Open
-                  </a>
+            <div className="qr-meta-box" style={{ marginTop: "14px", padding: "12px", background: "var(--bg-elevated, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border, #e2e8f0)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <span className={`pill ${isDynamic || forced ? "pill-active" : "pill-static"}`}>
+                  {isDynamic || forced ? "Dynamic Tracked QR" : "Static Direct QR"}
+                </span>
+                {createdId ? (
+                  <span className="pill pill-paused" style={{ fontFamily: "monospace", fontSize: "12px" }}>
+                    ID: <b>#{createdId}</b>
+                  </span>
+                ) : (
+                  <span className="pill pill-expired" style={{ fontSize: "11px" }}>
+                    Unsaved Preview
+                  </span>
                 )}
-                <button type="button" className="dash-btn" onClick={copyLink}>
-                  {copied ? "Copied!" : "Copy"}
-                </button>
               </div>
+              <div className="payload-row" style={{ marginTop: "6px" }}>
+                <div style={{ flex: 1, minWidth: 0, marginRight: "8px" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted, #64748b)", fontWeight: 600, marginBottom: "2px" }}>
+                    {isDynamic || forced ? "Permanent Redirect URL" : "Direct Destination"}
+                  </div>
+                  <p className="payload" style={{ margin: 0, wordBreak: "break-all" }}>{payload}</p>
+                </div>
+                <div style={{ whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "6px" }}>
+                  {createdId && (isDynamic || forced) && (
+                    <a className="dash-btn" href={payload} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
+                      Open
+                    </a>
+                  )}
+                  <button type="button" className="dash-btn" onClick={copyLink}>
+                    {copied ? "Copied!" : "Copy"}
+                  </button>
+                </div>
+              </div>
+              {createdId && (
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--success, #16a34a)" }}>
+                  ✓ Saved to your <Link to="/dashboard" style={{ fontWeight: 600 }}>Dashboard</Link>
+                </div>
+              )}
+              {!user && (
+                <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-muted, #64748b)" }}>
+                  Want to track scans &amp; edit destination later? <Link to="/dashboard">Sign in to save this QR →</Link>
+                </div>
+              )}
             </div>
           )}
           <p className="field-hint" style={{ marginTop: 10 }}>

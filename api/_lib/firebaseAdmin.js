@@ -1,10 +1,18 @@
-// api/_lib/firebaseAdmin.js — one place that initialises the Admin SDK for every function.
+// api/_lib/firebaseAdmin.js — Resilient database & admin provider.
+// Automatically delegates to universal persistent db adapter when service account is not present.
+
 import crypto from "node:crypto";
 import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
+import {
+  getDb as getUniversalDb,
+  serverTs as universalServerTs,
+  increment as universalIncrement,
+  cookieSecret as universalCookieSecret,
+} from "./db.js";
 
-let _sa;
+let _sa = null;
 export function loadServiceAccount() {
   if (_sa) return _sa;
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT || "";
@@ -20,12 +28,19 @@ function init() {
   if (!getApps().length) initializeApp({ credential: cert(loadServiceAccount()) });
 }
 
-let _db;
+let _db = null;
 export function getDb() {
-  if (_db) return _db;
-  init();
-  _db = getFirestore();
-  return _db;
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      if (_db) return _db;
+      init();
+      _db = getFirestore();
+      return _db;
+    } catch (e) {
+      console.warn("[FirebaseAdmin] Failed initializing Firestore, using universal database:", e.message);
+    }
+  }
+  return getUniversalDb();
 }
 
 export const adminAuth = () => {
@@ -33,9 +48,31 @@ export const adminAuth = () => {
   return getAuth();
 };
 
-export const increment = (n) => FieldValue.increment(n);
-export const serverTs = () => FieldValue.serverTimestamp();
+export const increment = (n) => {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      return FieldValue.increment(n);
+    } catch {}
+  }
+  return universalIncrement(n);
+};
 
-// Cookie-signing secret: explicit COOKIE_SECRET, else derived from the service-account key.
-export const cookieSecret = () =>
-  process.env.COOKIE_SECRET || crypto.createHash("sha256").update(loadServiceAccount().private_key || "qrpro").digest("hex");
+export const serverTs = () => {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      return FieldValue.serverTimestamp();
+    } catch {}
+  }
+  return universalServerTs();
+};
+
+export const cookieSecret = () => {
+  if (process.env.COOKIE_SECRET) return process.env.COOKIE_SECRET;
+  try {
+    const sa = loadServiceAccount();
+    if (sa?.private_key) {
+      return crypto.createHash("sha256").update(sa.private_key).digest("hex");
+    }
+  } catch {}
+  return universalCookieSecret();
+};

@@ -330,22 +330,34 @@ function LinkRow({ link, onEdit, onAnalytics }) {
     <tr>
       <td>{thumb && <img className="thumb" src={thumb} alt="QR" width="56" height="56" />}</td>
       <td>
-        <div className="cell-title">{link.label}</div>
-        <div className="dash-muted">{link.type || "url"} · created {formatDate(link.createdAt)}{link.adminPaused ? " · paused by admin" : ""}</div>
+        <div className="cell-title" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span>{link.label}</span>
+          <span className="pill" style={{ fontSize: "11px", padding: "1px 6px", fontFamily: "monospace", background: "var(--bg-elevated, #f1f5f9)" }}>#{link.id}</span>
+        </div>
+        <div className="dash-muted">{link.kind === "static" ? "Static direct" : "Dynamic redirect"} · {link.type || "url"} · created {formatDate(link.createdAt)}{link.adminPaused ? " · paused by admin" : ""}</div>
       </td>
       <td>
         {isStatic ? (
-          <span className="dest-link" title={link.payload}>
-            Static QR · {String(link.payload || "").slice(0, 60)}
-          </span>
+          <div>
+            <span className="dest-link" title={link.payload}>
+              {String(link.payload || "").slice(0, 70)}
+            </span>
+            <div className="dash-muted" style={{ fontSize: "11px" }}>Direct destination (static)</div>
+          </div>
         ) : link.kind === "bio" ? (
-          <a href={url} target="_blank" rel="noreferrer" className="dash-link dest-link">
-            Link-in-bio page · {link.bio?.links?.length || 0} buttons
-          </a>
+          <div>
+            <a href={url} target="_blank" rel="noreferrer" className="dash-link dest-link">
+              {url}
+            </a>
+            <div className="dash-muted" style={{ fontSize: "11px" }}>Bio page · {link.bio?.links?.length || 0} buttons</div>
+          </div>
         ) : (
-          <a href={link.destination} target="_blank" rel="noreferrer" className="dash-link dest-link" title={link.destination}>
-            {link.type === "pdf" ? "Uploaded file" : link.destination}
-          </a>
+          <div>
+            <a href={url} target="_blank" rel="noreferrer" className="dash-link dest-link" style={{ fontWeight: 600 }}>
+              {url}
+            </a>
+            <div className="dash-muted" style={{ fontSize: "11px" }}>Target: {link.destination}</div>
+          </div>
         )}
         {limitText && <div className="dash-muted">{limitText}</div>}
       </td>
