@@ -47,6 +47,7 @@ export default function Billing() {
   const plan = me && me.plan && PLANS[me.plan] ? PLANS[me.plan] : PLANS.free;
   const status = () => {
     if (!me) return "";
+    if (me.isAdmin) return "👑 Administrator account with permanent unlimited access across all platform features.";
     if (me.source === "admin") return me.currentPeriodEnd ? `Plan granted by support, valid until ${fmtDate(me.currentPeriodEnd)}.` : "Plan granted by support.";
     if (me.plan === "free") return me.rawPlan !== "free" ? "Your paid plan has ended." : "You're on the free plan.";
     if (me.cancelAtPeriodEnd || me.status === "canceled") return `Cancelled — you keep ${plan.name} until ${fmtDate(me.currentPeriodEnd)}.`;
@@ -81,10 +82,11 @@ export default function Billing() {
                   <p className="bill-status">{status()}</p>
                 </div>
                 <div className="bill-actions">
+                  {me?.isAdmin && <Link className="primary-link" to="/admin">Admin Panel →</Link>}
                   {me?.canManage && <button className="dash-btn" disabled={!!busy} onClick={portal}>{busy === "portal" ? "Opening…" : "Manage billing"}</button>}
                   {me?.canCancel && <button className="dash-btn dash-btn-danger" disabled={!!busy} onClick={cancel}>{busy === "cancel" ? "Cancelling…" : "Cancel plan"}</button>}
-                  {(!isPaidPlan(me?.plan) || me?.cancelAtPeriodEnd || me?.source === "admin") && <Link className="primary-link" to="/pricing">{me?.plan === "free" ? "Upgrade" : "Choose a plan"}</Link>}
-                  {me?.plan === "pro" && !me?.cancelAtPeriodEnd && me?.source !== "admin" && !me?.canManage && <Link className="dash-btn" to="/pricing">See plans</Link>}
+                  {!me?.isAdmin && (!isPaidPlan(me?.plan) || me?.cancelAtPeriodEnd || me?.source === "admin") && <Link className="primary-link" to="/pricing">{me?.plan === "free" ? "Upgrade" : "Choose a plan"}</Link>}
+                  {!me?.isAdmin && me?.plan === "pro" && !me?.cancelAtPeriodEnd && me?.source !== "admin" && !me?.canManage && <Link className="dash-btn" to="/pricing">See plans</Link>}
                 </div>
               </div>
             </section>

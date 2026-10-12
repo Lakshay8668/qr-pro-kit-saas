@@ -16,6 +16,13 @@ const json = (res, code, body) => {
 };
 
 import { PLANS, PLAN_ORDER, effectivePlanId, entitlementsFor } from "../../shared/plans.js";
+import {
+  getRazorpayCredentials,
+  maskPlanId,
+  getSafeCredentialFingerprint,
+  getRazorpayPlanEnvConfig,
+  cleanPlanId,
+} from "./providers.js";
 
 const ms = (t) => (t?.toMillis ? t.toMillis() : typeof t === "number" ? t : 0);
 const DAY = 86400000;
@@ -26,11 +33,16 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
   const lastDays = (days) => Array.from({ length: days }, (_, i) => dayKey(now() - (days - 1 - i) * DAY));
 
   async function loadAll(db) {
-    const [u, l] = await Promise.all([db.collection("users").limit(CAP).get(), db.collection("links").limit(CAP).get()]);
+    const [u, l, ev] = await Promise.all([
+      db.collection("users").limit(CAP).get(),
+      db.collection("links").limit(CAP).get(),
+      db.collection("billingEvents").limit(500).get().catch(() => ({ docs: [] })),
+    ]);
     const users = u.docs.map((d) => ({ uid: d.id, ...d.data() }));
     const links = l.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const events = (ev.docs || []).map((d) => ({ id: d.id, ...d.data() }));
     const byUid = new Map(users.map((x) => [x.uid, x]));
-    return { users, links, byUid };
+    return { users, links, events, byUid };
   }
 
   const emailOf = (byUid, uid) => byUid.get(uid)?.email || "(not seen since upgrade)";
@@ -96,6 +108,17 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
           users.forEach((u) => { const k = dayKey(ms(u.createdAt)); if (k in signups) signups[k]++; });
           links.forEach((l) => { const k = dayKey(ms(l.createdAt)); if (k in created) created[k]++; });
           const editable = links.filter((l) => l.kind !== "static");
+          const payingUsers = users.filter((u) => {
+            const p = effectivePlanId(u, t);
+            return p === "pro" || p === "business";
+          });
+          const mrr = payingUsers.reduce((sum, u) => {
+            const p = effectivePlanId(u, t);
+            const interval = u.planInterval || "monthly";
+            const price = interval === "yearly" ? (PLANS[p]?.price?.yearly || 0) / 12 : (PLANS[p]?.price?.monthly || 0);
+            return sum + Math.round(price);
+          }, 0);
+
           return json(res, 200, {
             users: users.length,
             newUsers7d: users.filter((u) => ms(u.createdAt) >= t - 7 * DAY).length,
@@ -108,6 +131,8 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
             protectedQrs: links.filter((l) => l.password?.hash).length,
             scans: links.reduce((s, l) => s + (l.scans || 0), 0),
             plans: Object.fromEntries(PLAN_ORDER.map((p) => [p, users.filter((u) => effectivePlanId(u, t) === p).length])),
+            payingCount: payingUsers.length,
+            mrr,
             signupsByDay: keys.map((k) => ({ label: k.slice(5), count: signups[k] })),
             qrsByDay: keys.map((k) => ({ label: k.slice(5), count: created[k] })),
             topQrs: [...editable].sort((a, b) => (b.scans || 0) - (a.scans || 0)).slice(0, 10)
@@ -136,16 +161,117 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
 
         if (action === "links") {
           const q = String(req.query?.q || "").trim().toLowerCase();
+          const ownerId = String(req.query?.ownerId || "").trim();
+          const kind = String(req.query?.kind || "").trim().toLowerCase();
           let rows = links.map((l) => ({
             id: l.id, label: l.label || "", type: l.type || "url", kind: l.kind || "redirect",
             ownerId: l.ownerId, owner: emailOf(byUid, l.ownerId), scans: l.scans || 0,
             active: l.active !== false, adminPaused: !!l.adminPaused, protected: !!l.password?.hash,
-            createdAt: ms(l.createdAt), expiresAt: ms(l.expiresAt),
+            deviceTargeting: !!(l.deviceTargeting && (l.deviceTargeting.ios || l.deviceTargeting.android)),
+            createdAt: ms(l.createdAt), expiresAt: ms(l.expiresAt), destination: l.destination || l.payload || "",
           }));
-          if (q) rows = rows.filter((r) => `${r.label} ${r.owner} ${r.id}`.toLowerCase().includes(q));
+          if (ownerId) rows = rows.filter((r) => r.ownerId === ownerId);
+          if (kind && kind !== "all") {
+            if (kind === "static") rows = rows.filter((r) => r.kind === "static");
+            else if (kind === "editable" || kind === "dynamic") rows = rows.filter((r) => r.kind !== "static" && r.kind !== "bio" && r.type !== "pdf");
+            else if (kind === "bio") rows = rows.filter((r) => r.kind === "bio");
+            else if (kind === "file" || kind === "pdf") rows = rows.filter((r) => r.type === "pdf" || r.kind === "file");
+          }
+          if (q) rows = rows.filter((r) => `${r.label} ${r.owner} ${r.id} ${r.destination}`.toLowerCase().includes(q));
           rows.sort((a, b) => b.createdAt - a.createdAt);
-          return json(res, 200, { total: rows.length, links: rows.slice(0, 300) });
+          return json(res, 200, { total: rows.length, links: rows.slice(0, 500) });
         }
+
+        if (action === "billing") {
+          const t = now();
+          const creds = getRazorpayCredentials(process.env);
+          const payingUsers = users.filter((u) => {
+            const p = effectivePlanId(u, t);
+            return p === "pro" || p === "business";
+          });
+          const mrr = payingUsers.reduce((sum, u) => {
+            const p = effectivePlanId(u, t);
+            const interval = u.planInterval || "monthly";
+            const price = interval === "yearly" ? (PLANS[p]?.price?.yearly || 0) / 12 : (PLANS[p]?.price?.monthly || 0);
+            return sum + Math.round(price);
+          }, 0);
+
+          const eventRows = (events || [])
+            .map((e) => ({
+              id: e.id,
+              uid: e.uid,
+              userEmail: emailOf(byUid, e.uid),
+              provider: e.provider || (e.id.startsWith("rzp") ? "razorpay" : e.id.startsWith("stripe") ? "stripe" : "unknown"),
+              plan: e.plan || "pro",
+              interval: e.interval || "monthly",
+              subscriptionId: e.subscriptionId || "",
+              paymentId: e.paymentId || "",
+              status: e.status || "active",
+              mode: (e.id.includes("test") || e.provider === "test" || creds?.keyMode === "test") ? "test" : "live",
+              ts: ms(e.ts),
+            }))
+            .sort((a, b) => b.ts - a.ts)
+            .slice(0, 100);
+
+          return json(res, 200, {
+            payingCount: payingUsers.length,
+            mrr,
+            subscribers: payingUsers.map((u) => ({
+              uid: u.uid,
+              email: u.email || "",
+              plan: effectivePlanId(u, t),
+              interval: u.planInterval || "monthly",
+              status: u.planStatus || "active",
+              source: u.planSource || "unknown",
+              currentPeriodEnd: Number(u.currentPeriodEnd) || 0,
+            })),
+            events: eventRows,
+          });
+        }
+
+        if (action === "diagnostics") {
+          const e = process.env;
+          const creds = getRazorpayCredentials(e);
+          const rzpPlans = {};
+          for (const plan of ["pro", "business"]) {
+            for (const interval of ["monthly", "yearly"]) {
+              const cfg = getRazorpayPlanEnvConfig(e, plan, interval);
+              rzpPlans[`${plan}_${interval}`] = {
+                envVar: cfg.key,
+                configuredId: maskPlanId(cfg.value),
+                isSet: !!cfg.value,
+              };
+            }
+          }
+
+          return json(res, 200, {
+            timestamp: new Date().toISOString(),
+            server: {
+              nodeVersion: process.version,
+              uptimeSeconds: Math.round(process.uptime()),
+            },
+            admin: {
+              configured: adminUids().length > 0,
+              count: adminUids().length,
+            },
+            razorpay: {
+              configured: !!(creds.keyId && creds.keySecret),
+              keyMode: creds.keyMode,
+              keyIdPreview: maskPlanId(creds.keyId),
+              keyIdSourceVar: creds.keySourceVar,
+              keyIdFingerprint: getSafeCredentialFingerprint(creds.keyId),
+              keySecretConfigured: !!creds.keySecret,
+              keySecretFingerprint: getSafeCredentialFingerprint(creds.keySecret),
+              webhookSecretConfigured: !!creds.webhookSecret,
+              configuredPlans: rzpPlans,
+            },
+            database: {
+              totalUsers: users.length,
+              totalLinks: links.length,
+            },
+          });
+        }
+
         return json(res, 400, { error: "unknown_action" });
       }
 

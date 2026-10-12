@@ -3,12 +3,13 @@
 import { createAdminHandler } from "./_lib/admin.js";
 import { getDb, adminAuth, serverTs } from "./_lib/firebaseAdmin.js";
 import { verifyToken } from "./_lib/auth.js";
+import { getAdminUids } from "./_lib/adminAuth.js";
 
 export default createAdminHandler({
   getDb,
   serverTs,
   verify: verifyToken,
-  adminUids: () => (process.env.ADMIN_UIDS || "").split(",").map((s) => s.trim()).filter(Boolean),
+  adminUids: () => getAdminUids(process.env),
   setAuthDisabled: (uid, disabled) => {
     try {
       return adminAuth().updateUser(uid, { disabled });

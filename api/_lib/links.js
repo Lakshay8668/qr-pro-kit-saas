@@ -11,6 +11,7 @@ import { entitlementsFor, PLANS, LIMIT_LABELS } from "../../shared/plans.js";
 import { countLinks } from "./quota.js";
 import { cleanBio, cleanDesign, cleanDestinations, cleanMax, cleanPasswordSpec, isHttpUrl } from "../../shared/linkClean.js";
 import { ensureUser } from "./userStore.js";
+import { isAdminUid } from "./adminAuth.js";
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const MAX_BULK = 200;
@@ -34,10 +35,11 @@ class Fail extends Error {
 const randomId = (len = 7) => [...crypto.randomBytes(len)].map((b) => ALPHABET[b % ALPHABET.length]).join("");
 const alreadyExists = (e) => e?.code === 6 || e?.code === "already-exists" || /already exists/i.test(e?.message || "");
 
-export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.now(), newId = randomId }) {
+export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.now(), newId = randomId, adminUids }) {
   const locked = (ent, feature, what) => {
+    if (ent.isAdmin) return;
     if (!ent[feature]) {
-      throw new Fail(402, "feature_locked", `${what} isn't included in the ${PLANS[ent.plan].name} plan. Upgrade to use it.`, {
+      throw new Fail(402, "feature_locked", `${what} isn't included in the ${PLANS[ent.plan]?.name || "Free"} plan. Upgrade to use it.`, {
         upgrade: true, feature, plan: ent.plan,
       });
     }
@@ -153,8 +155,10 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       const db = getDb();
       const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
 
+      const isAdmin = adminUids ? (typeof adminUids === "function" ? adminUids() : adminUids).includes(me.uid) : isAdminUid(me.uid);
       const user = (await ensureUser(db, me, serverTs)) || {};
-      if (user.disabled) return json(res, 403, { error: "account_disabled", message: "This account has been disabled." });
+      if (isAdmin) user.isAdmin = true;
+      if (user.disabled && !isAdmin) return json(res, 403, { error: "account_disabled", message: "This account has been disabled." });
       const ent = entitlementsFor(user, now());
 
       // ------------------------------------------------------------- GET: list links
@@ -176,7 +180,7 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         const snap = await db.collection("links").doc(id).get();
         if (!snap.exists) throw new Fail(404, "not_found", "Link not found.");
         const data = snap.data();
-        if (data.ownerId !== me.uid) throw new Fail(403, "forbidden", "Access denied.");
+        if (data.ownerId !== me.uid && !isAdmin) throw new Fail(403, "forbidden", "Access denied.");
         return json(res, 200, { link: { id: snap.id, ...data } });
       }
 
@@ -186,7 +190,7 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         if (!id) throw new Fail(400, "bad_request", "Missing link ID.");
         const snap = await db.collection("links").doc(id).get();
         if (!snap.exists) throw new Fail(404, "not_found", "Link not found.");
-        if (snap.data().ownerId !== me.uid) throw new Fail(403, "forbidden", "Access denied.");
+        if (snap.data().ownerId !== me.uid && !isAdmin) throw new Fail(403, "forbidden", "Access denied.");
         const scansSnap = await db.collection("links").doc(id).collection("scans").orderBy("ts", "desc").limit(2000).get();
         const rows = (scansSnap.docs || []).map((d) => {
           const v = d.data();
@@ -200,7 +204,7 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         const doc = buildDoc(body.link, me.uid, ent);
         const used = await countLinks(db, me.uid);
         const key = doc.kind === "static" ? "staticQrs" : "dynamicQrs";
-        if (used[key] >= ent[key]) throw limitFail(ent, key, used[key]);
+        if (!isAdmin && used[key] >= ent[key]) throw limitFail(ent, key, used[key]);
         return json(res, 200, { id: await writeOne(db, doc) });
       }
 
@@ -209,13 +213,14 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         locked(ent, "bulk", "Bulk creation");
         const items = Array.isArray(body.items) ? body.items : [];
         if (!items.length) throw new Fail(400, "bad_request", "No rows to create.");
-        if (items.length > MAX_BULK) throw new Fail(400, "bad_request", `Max ${MAX_BULK} rows per batch.`);
+        const maxBatch = isAdmin ? 1000 : MAX_BULK;
+        if (items.length > maxBatch) throw new Fail(400, "bad_request", `Max ${maxBatch} rows per batch.`);
         const docs = items.map((it) => {
           if ((it?.kind || "redirect") !== "redirect") throw new Fail(400, "bad_request", "Bulk only supports redirect QR codes.");
           return buildDoc(it, me.uid, ent);
         });
         const used = await countLinks(db, me.uid);
-        if (used.dynamicQrs + docs.length > ent.dynamicQrs) {
+        if (!isAdmin && used.dynamicQrs + docs.length > ent.dynamicQrs) {
           const left = Math.max(0, ent.dynamicQrs - used.dynamicQrs);
           throw limitFail(ent, "dynamicQrs", used.dynamicQrs, ` This batch needs ${docs.length} but only ${left} are left.`);
         }

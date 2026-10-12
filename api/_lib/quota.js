@@ -6,6 +6,7 @@
 // Fails OPEN: if Firestore hiccups we would rather let a scan through than break a printed QR.
 
 import { entitlementsFor } from "../../shared/plans.js";
+import { isAdminUid } from "./adminAuth.js";
 
 export const monthKey = (t) => new Date(t).toISOString().slice(0, 7).replace("-", "");
 export const usageId = (uid, t) => `${uid}_${monthKey(t)}`;
@@ -21,6 +22,9 @@ export async function countLinks(db, uid) {
 export function createQuota({ getDb, increment, serverTs, now = () => Date.now() }) {
   return {
     async check(ownerId) {
+      if (isAdminUid(ownerId)) {
+        return { ok: true, used: 0, limit: Infinity, plan: "admin", isAdmin: true };
+      }
       try {
         const db = getDb();
         const t = now();

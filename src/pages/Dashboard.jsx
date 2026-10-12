@@ -471,6 +471,12 @@ export default function Dashboard() {
             <Link to="/bulk">Bulk create</Link>
             <span className="dash-sep">·</span>
             <Link to="/billing">Plan &amp; billing</Link>
+            {me?.isAdmin && (
+              <>
+                <span className="dash-sep">·</span>
+                <Link to="/admin" style={{ color: "var(--qp-brand)", fontWeight: 700 }}>Admin Panel</Link>
+              </>
+            )}
             <span className="dash-user"> · {displayName}</span>
           </p>
         </div>
@@ -509,8 +515,11 @@ export default function Dashboard() {
         <div className="usage-strip">
           <UsageMeter label="Editable QR codes" used={editableCount} limit={me?.limits?.dynamicQrs ?? 3} />
           <UsageMeter label="Scans this month" used={me?.usage?.monthlyScans ?? 0} limit={me?.limits?.monthlyScans ?? 500} />
-          {(me?.plan === "free" || editableCount >= (me?.limits?.dynamicQrs ?? 3) || (me?.usage?.monthlyScans ?? 0) >= (me?.limits?.monthlyScans ?? 500)) && me?.plan !== "business" && (
+          {!me?.isAdmin && (me?.plan === "free" || editableCount >= (me?.limits?.dynamicQrs ?? 3) || (me?.usage?.monthlyScans ?? 0) >= (me?.limits?.monthlyScans ?? 500)) && me?.plan !== "business" && (
             <Link to="/pricing" className="primary-link usage-cta">{me?.plan === "free" ? "Upgrade" : "Get more"}</Link>
+          )}
+          {me?.isAdmin && (
+            <Link to="/admin" className="primary-link usage-cta">Admin Panel →</Link>
           )}
         </div>
       )}

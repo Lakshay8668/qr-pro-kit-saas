@@ -22,7 +22,16 @@ export async function applyState({ db, uid, state, eventKey, eventTs, now = () =
     const [ev, us] = await Promise.all([tx.get(evRef), tx.get(userRef)]);
     if (ev.exists) return "duplicate";
     const cur = us.exists ? us.data() : {};
-    tx.set(evRef, { uid, ts: serverTs ? serverTs() : now() });
+    tx.set(evRef, {
+      uid,
+      ts: serverTs ? serverTs() : now(),
+      provider: state.planSource || null,
+      plan: state.plan || null,
+      interval: state.planInterval || null,
+      subscriptionId: state.billing?.subscriptionId || null,
+      paymentId: state.billing?.paymentId || null,
+      status: state.planStatus || "active",
+    });
 
     const curBilling = cur.billing || {};
     if (eventTs && curBilling.lastEventTs && eventTs < curBilling.lastEventTs) return "stale";

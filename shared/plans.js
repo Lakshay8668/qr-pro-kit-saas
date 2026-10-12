@@ -34,6 +34,14 @@ export const PLANS = {
     limits: { dynamicQrs: 500, staticQrs: 5000, monthlyScans: 200000 },
     features: { password: true, deviceTargeting: true, bulk: true },
   },
+  admin: {
+    id: "admin",
+    name: "Admin Unlimited",
+    tagline: "Unrestricted Master Access",
+    price: { monthly: 0, yearly: 0 },
+    limits: { dynamicQrs: 999999999, staticQrs: 999999999, monthlyScans: 999999999 },
+    features: { password: true, deviceTargeting: true, bulk: true },
+  },
 };
 
 export const FEATURE_LABELS = {
@@ -60,6 +68,7 @@ export const GRACE_DAYS = { renewal: 3, pastDue: 5 };
 
 /** Which plan is the user ACTUALLY entitled to right now (falls back to "free"). */
 export function effectivePlanId(u, now = Date.now()) {
+  if (u?.isAdmin || u?.plan === "admin") return "admin";
   const plan = PLANS[u?.plan] ? u.plan : "free";
   if (plan === "free") return "free";
   const status = u.planStatus || "active";
@@ -73,7 +82,8 @@ export function effectivePlanId(u, now = Date.now()) {
 /** Flat entitlement object, e.g. { plan, dynamicQrs, staticQrs, monthlyScans, password, deviceTargeting, bulk } */
 export function entitlementsFor(u, now = Date.now()) {
   const id = effectivePlanId(u, now);
-  return { plan: id, ...PLANS[id].limits, ...PLANS[id].features };
+  const p = PLANS[id] || PLANS.free;
+  return { plan: id, isAdmin: id === "admin", ...p.limits, ...p.features };
 }
 
 export const formatPrice = (n) => `${CURRENCY.symbol}${Number(n).toLocaleString("en-IN")}`;

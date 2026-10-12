@@ -21,6 +21,7 @@ import {
 import { countLinks, monthKey, usageId } from "./quota.js";
 import { ensureUser } from "./userStore.js";
 import { applyState } from "./subscriptions.js";
+import { isAdminUid, getAdminUids } from "./adminAuth.js";
 
 const json = (res, code, body) => {
   res.statusCode = code;
@@ -96,6 +97,10 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
           providers: {
             stripe: stripeConfigured,
             razorpay: rzpConfigured,
+          },
+          admin: {
+            configured: getAdminUids(e).length > 0,
+            count: getAdminUids(e).length,
           },
           razorpay: {
             configured: rzpConfigured,
@@ -231,7 +236,9 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
       }
 
       const db = getDb();
+      const isAdmin = isAdminUid(me.uid, env());
       const user = (await ensureUser(db, me, serverTs)) || {};
+      if (isAdmin) user.isAdmin = true;
       const uRef = db.collection("users").doc(me.uid);
       const t = now();
       const ent = entitlementsFor(user, t);
@@ -242,19 +249,24 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         const [used, usage] = await Promise.all([countLinks(db, me.uid), db.collection("usage").doc(usageId(me.uid, t)).get()]);
         const fromAdmin = user.planSource === "admin";
         return json(res, 200, {
-          plan: ent.plan,
+          plan: isAdmin ? "admin" : ent.plan,
           rawPlan: user.plan || "free",
-          status: user.planStatus || "active",
+          status: "active",
+          isAdmin,
           interval: user.planInterval || null,
           currentPeriodEnd: Number(user.currentPeriodEnd) || 0,
           cancelAtPeriodEnd: !!user.cancelAtPeriodEnd,
           provider: billing.provider || null,
-          source: user.planSource || null,
-          limits: { dynamicQrs: ent.dynamicQrs, staticQrs: ent.staticQrs, monthlyScans: ent.monthlyScans },
-          features: { password: ent.password, deviceTargeting: ent.deviceTargeting, bulk: ent.bulk },
+          source: isAdmin ? "admin_allowlist" : (user.planSource || null),
+          limits: isAdmin
+            ? { dynamicQrs: 999999999, staticQrs: 999999999, monthlyScans: 999999999 }
+            : { dynamicQrs: ent.dynamicQrs, staticQrs: ent.staticQrs, monthlyScans: ent.monthlyScans },
+          features: isAdmin
+            ? { password: true, deviceTargeting: true, bulk: true }
+            : { password: ent.password, deviceTargeting: ent.deviceTargeting, bulk: ent.bulk },
           usage: { ...used, monthlyScans: usage.exists ? Number(usage.data().scans) || 0 : 0, month: monthKey(t) },
           canManage: billing.provider === "stripe" && !!billing.customerId,
-          canCancel: !!billing.subscriptionId && !fromAdmin && user.planStatus === "active" && !user.cancelAtPeriodEnd && ent.plan !== "free",
+          canCancel: !!billing.subscriptionId && !fromAdmin && !isAdmin && user.planStatus === "active" && !user.cancelAtPeriodEnd && ent.plan !== "free",
         });
       }
 

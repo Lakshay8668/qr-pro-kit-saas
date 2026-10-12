@@ -644,4 +644,241 @@ console.log("Running production repair & verification tests...");
   ok("getRazorpayCredentials safely prioritizes Test Mode credentials over Live credentials");
 }
 
+// ------------------------------------------------------------------ 7. Admin Unlimited Access & Platform Observability Verification
+{
+  const { getAdminUids, isAdminUid, getAdminEntitlements } = await import("../api/_lib/adminAuth.js");
+  const { createAdminHandler } = await import("../api/_lib/admin.js");
+  const { createQuota } = await import("../api/_lib/quota.js");
+
+  const testEnv = {
+    ADMIN_UIDS: "admin_super_uid_1, admin_super_uid_2",
+    RAZORPAY_TEST_KEY_ID: "rzp_test_mockKey999",
+    RAZORPAY_TEST_KEY_SECRET: "mockSecret888",
+    RAZORPAY_PLAN_PRO_MONTHLY: "plan_test_pro_m",
+    RAZORPAY_PLAN_PRO_YEARLY: "plan_test_pro_y",
+    RAZORPAY_PLAN_BUSINESS_MONTHLY: "plan_test_biz_m",
+    RAZORPAY_PLAN_BUSINESS_YEARLY: "plan_test_biz_y",
+  };
+  process.env.ADMIN_UIDS = testEnv.ADMIN_UIDS;
+
+  // A. Admin allowlist resolution
+  const admins = getAdminUids(testEnv);
+  assert.deepEqual(admins, ["admin_super_uid_1", "admin_super_uid_2"]);
+  assert.equal(isAdminUid("admin_super_uid_1", testEnv), true);
+  assert.equal(isAdminUid("normal_user_xyz", testEnv), false);
+  ok("getAdminUids and isAdminUid correctly parse allowlist from environment");
+
+  // B. Admin entitlements guarantee unlimited access across all capabilities
+  const ent = getAdminEntitlements();
+  assert.equal(ent.plan, "admin");
+  assert.equal(ent.limits.dynamicQrs, 999999999);
+  assert.equal(ent.limits.monthlyScans, 999999999);
+  assert.equal(ent.limits.staticQrs, 999999999);
+  assert.equal(ent.features.bulk, true);
+  assert.equal(ent.features.password, true);
+  assert.equal(ent.features.deviceTargeting, true);
+  ok("getAdminEntitlements grants permanent unlimited access to all features and quotas");
+
+  // C. Admin bypasses all quota and feature restrictions in Links API
+  const db = createUniversalDb();
+  let nextId = 500;
+  const mockVerify = async (token) => {
+    if (token === "token_admin") return { uid: "admin_super_uid_1", email: "admin@qrpro.com" };
+    if (token === "token_regular") return { uid: "regular_user_bob", email: "bob@example.com" };
+    throw new Error("Invalid token");
+  };
+
+  const linksHandler = createLinksHandler({
+    getDb: () => db,
+    verify: mockVerify,
+    adminUids: () => admins,
+    serverTs: () => new Date(),
+    now: () => Date.now(),
+    newId: () => `qr_${++nextId}`,
+  });
+
+  const authAdmin = { Authorization: "Bearer token_admin" };
+  const authBob = { Authorization: "Bearer token_regular" };
+
+  // Set regular user bob in db with Free plan
+  await db.collection("users").doc("regular_user_bob").set({
+    uid: "regular_user_bob",
+    email: "bob@example.com",
+    plan: "free",
+    planStatus: "active",
+  });
+
+  // Regular user bob creates 3 dynamic QRs (Free limit = 3)
+  for (let i = 1; i <= 3; i++) {
+    const res = await callJson(linksHandler, {
+      method: "POST",
+      headers: authBob,
+      query: { action: "create" },
+      body: { link: { destination: `https://example.com/${i}`, label: `Bob QR ${i}`, kind: "redirect" } },
+    });
+    assert.equal(res.code, 200);
+  }
+
+  // Regular user bob tries 4th dynamic QR -> MUST fail with 402/403 limit_reached
+  let bobLimitRes = await callJson(linksHandler, {
+    method: "POST",
+    headers: authBob,
+    query: { action: "create" },
+    body: { link: { destination: "https://example.com/4", label: "Bob QR 4", kind: "redirect" } },
+  });
+  assert.equal(bobLimitRes.code, 402);
+  assert.equal(bobLimitRes.body.error, "limit_reached");
+  ok("regular customer is strictly bounded by Free dynamic QR limit (3)");
+
+  // Regular user bob tries password protection -> MUST fail with 402 feature_locked
+  const validPwSpec = {
+    salt: "a".repeat(32),
+    hash: "b".repeat(64),
+    iter: 100000,
+  };
+  let bobPwRes = await callJson(linksHandler, {
+    method: "POST",
+    headers: authBob,
+    query: { action: "create" },
+    body: {
+      link: {
+        destination: "https://example.com/secret",
+        label: "Secret",
+        kind: "redirect",
+        password: validPwSpec,
+      },
+    },
+  });
+  assert.equal(bobPwRes.code, 402);
+  assert.equal(bobPwRes.body.error, "feature_locked");
+  ok("regular customer is strictly blocked from Pro features (password protection)");
+
+  // Administrator creates 5 dynamic QRs (exceeding Free limit) -> ALL MUST SUCCEED
+  for (let i = 1; i <= 5; i++) {
+    const adminRes = await callJson(linksHandler, {
+      method: "POST",
+      headers: authAdmin,
+      query: { action: "create" },
+      body: { link: { destination: `https://admin.example.com/${i}`, label: `Admin QR ${i}`, kind: "redirect" } },
+    });
+    assert.equal(adminRes.code, 200);
+    assert.ok(adminRes.body.id);
+  }
+  ok("administrator successfully creates dynamic QR codes beyond normal plan caps without payment");
+
+  // Administrator creates password-protected and device-targeted QR -> SUCCEEDS
+  const adminFeatureRes = await callJson(linksHandler, {
+    method: "POST",
+    headers: authAdmin,
+    query: { action: "create" },
+    body: {
+      link: {
+        destination: "https://admin.example.com/vault",
+        label: "Admin Vault",
+        kind: "redirect",
+        password: validPwSpec,
+        deviceTargeting: { ios: "https://apps.apple.com/app", android: "https://play.google.com/app" },
+      },
+    },
+  });
+  assert.equal(adminFeatureRes.code, 200);
+  assert.ok(adminFeatureRes.body.id);
+  ok("administrator successfully creates password-protected and device-targeted QR codes without feature lock");
+
+  // Administrator creates batch QRs using create-many -> SUCCEEDS
+  const adminBatchRes = await callJson(linksHandler, {
+    method: "POST",
+    headers: authAdmin,
+    query: { action: "create-many" },
+    body: {
+      items: [
+        { destination: "https://admin.example.com/batch1", label: "Batch 1", type: "url" },
+        { destination: "https://admin.example.com/batch2", label: "Batch 2", type: "url" },
+        { destination: "https://admin.example.com/batch3", label: "Batch 3", type: "url" },
+      ],
+    },
+  });
+  assert.equal(adminBatchRes.code, 200);
+  assert.equal(adminBatchRes.body.ids.length, 3);
+  ok("administrator successfully creates bulk batches of QR codes without feature locks");
+
+  // D. Admin scan quota check
+  const quota = createQuota({ getDb: () => db, increment: (n) => n, serverTs: () => new Date(), now: () => Date.now() });
+  const adminQuota = await quota.check("admin_super_uid_1");
+  assert.equal(adminQuota.ok, true);
+  assert.equal(adminQuota.limit, Infinity);
+  assert.equal(adminQuota.isAdmin, true);
+  ok("quota.check permits unlimited scans for administrators");
+
+  // E. Admin Panel API (/api/admin) verification
+  const adminApi = createAdminHandler({
+    getDb: () => db,
+    verify: mockVerify,
+    adminUids: () => admins,
+    setAuthDisabled: async () => {},
+    serverTs: () => new Date(),
+    now: () => Date.now(),
+  });
+
+  // Non-admin calling /api/admin is rejected with HTTP 403
+  const nonAdminRes = await callJson(adminApi, {
+    method: "GET",
+    headers: authBob,
+    query: { action: "overview" },
+  });
+  assert.equal(nonAdminRes.code, 403);
+  assert.equal(nonAdminRes.body.error, "not_admin");
+  ok("GET /api/admin strictly forbids non-admin callers (HTTP 403 not_admin)");
+
+  // Verified admin calling overview -> 200 with complete metrics
+  const ovRes = await callJson(adminApi, {
+    method: "GET",
+    headers: authAdmin,
+    query: { action: "overview" },
+  });
+  assert.equal(ovRes.code, 200);
+  assert.ok(ovRes.body.users >= 2);
+  assert.ok(ovRes.body.qrs >= 8);
+  assert.equal(Array.isArray(ovRes.body.signupsByDay), true);
+  assert.equal(Array.isArray(ovRes.body.qrsByDay), true);
+  ok("GET /api/admin?action=overview returns accurate customer, QR, and trend metrics");
+
+  // Verified admin calling users -> 200 with synced customer records
+  const usersRes = await callJson(adminApi, {
+    method: "GET",
+    headers: authAdmin,
+    query: { action: "users" },
+  });
+  assert.equal(usersRes.code, 200);
+  assert.ok(usersRes.body.users.length >= 2);
+  const bobDoc = usersRes.body.users.find((u) => u.uid === "regular_user_bob");
+  assert.ok(bobDoc);
+  assert.equal(bobDoc.qrs, 3);
+  ok("GET /api/admin?action=users returns full customer list with accurate QR counts");
+
+  // Verified admin calling links with ownerId filter
+  const linksRes = await callJson(adminApi, {
+    method: "GET",
+    headers: authAdmin,
+    query: { action: "links", ownerId: "admin_super_uid_1" },
+  });
+  assert.equal(linksRes.code, 200);
+  assert.ok(linksRes.body.links.length >= 6);
+  assert.ok(linksRes.body.links.every((l) => l.ownerId === "admin_super_uid_1"));
+  ok("GET /api/admin?action=links supports ownerId filtering for customer drawer view");
+
+  // Verified admin calling diagnostics
+  const diagRes = await callJson(adminApi, {
+    method: "GET",
+    headers: authAdmin,
+    query: { action: "diagnostics" },
+  });
+  assert.equal(diagRes.code, 200);
+  assert.equal(diagRes.body.admin.configured, true);
+  assert.equal(diagRes.body.admin.count, 2);
+  assert.ok(diagRes.body.database.totalUsers >= 2);
+  assert.ok(diagRes.body.database.totalLinks >= 8);
+  ok("GET /api/admin?action=diagnostics reports gateway, admin configuration, and database stats");
+}
+
 console.log("\nAll production repair & verification tests passed!\n");

@@ -126,6 +126,7 @@ export default function Pricing() {
   };
 
   const cta = (id) => {
+    if (me?.isAdmin) return <button className="dash-btn plan-cta" disabled>👑 Admin Unlimited Active</button>;
     const isCurrent = me?.plan === id;
     if (isCurrent) return <button className="dash-btn plan-cta" disabled>Your current plan</button>;
     if (id === "free") return user ? <button className="dash-btn plan-cta" disabled>Included</button> : <Link to="/" className="dash-btn plan-cta">Start free</Link>;
@@ -167,6 +168,11 @@ export default function Pricing() {
           </div>
         </div>
 
+        {me?.isAdmin && (
+          <div className="alert success pricing-note">
+            👑 <strong>Admin Unlimited Access Active:</strong> This account has unrestricted platform-wide privileges. All dynamic and static QR codes, password protection, and bulk creation are permanently unlocked.
+          </div>
+        )}
         {params.get("checkout") === "cancel" && <div className="alert warn pricing-note">Checkout cancelled — you haven't been charged.</div>}
         {providers && !enabled.length && (
           <div className="alert warn pricing-note">

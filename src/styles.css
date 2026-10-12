@@ -206,3 +206,20 @@ a.plan-badge:hover{filter:brightness(.97)}
 .auth-divider{display:flex;align-items:center;text-align:center;margin:14px 0 16px;color:#9ca3af;font-size:12px;font-weight:500}
 .auth-divider::before,.auth-divider::after{content:'';flex:1;border-bottom:1px solid #e5e7eb}
 .auth-divider span{padding:0 10px}
+
+/* ===================== Admin SaaS UI styles ===================== */
+.plan-badge.plan-admin{background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border-color:#4338ca}
+.admin-drawer-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);backdrop-filter:blur(4px);z-index:900;display:flex;justify-content:flex-end}
+.admin-drawer{width:min(580px,100vw);background:#fff;height:100%;overflow-y:auto;box-shadow:-8px 0 32px rgba(15,23,42,.2);display:flex;flex-direction:column;animation:slideIn .2s ease-out}
+@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+.admin-drawer-head{padding:20px 24px;border-bottom:1px solid var(--qp-line);display:flex;justify-content:space-between;align-items:center}
+.admin-drawer-body{padding:24px;display:flex;flex-direction:column;gap:20px}
+.diag-card{background:#fff;border:1px solid var(--qp-line);border-radius:16px;padding:22px;box-shadow:0 4px 16px rgba(24,32,60,.025)}
+.diag-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+.badge-test{background:#fef3c7;color:#92400e;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.badge-live{background:#dcfce7;color:#166534;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.badge-ready{background:#ecfdf5;color:#047857;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.badge-missing{background:#fef2f2;color:#b91c1c;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700}
+.copy-pill{background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:2px 6px;font-size:11px;font-family:monospace;cursor:pointer}
+.copy-pill:hover{background:#e2e8f0}
+

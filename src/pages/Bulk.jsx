@@ -95,7 +95,7 @@ export default function Bulk() {
     const { rows, bad } = parse(text);
     if (!rows.length) return setError("No valid lines found. Use one per line: label,https://example.com");
     if (rows.length > MAX_ROWS) return setError(`Please keep it to ${MAX_ROWS} rows per batch (you have ${rows.length}).`);
-    if (remainingDynamic !== null && rows.length > remainingDynamic) {
+    if (!me?.isAdmin && remainingDynamic !== null && rows.length > remainingDynamic) {
       setUpgrade(true);
       return setError(`Your account has ${remainingDynamic} editable QR codes remaining, but you entered ${rows.length}. Please reduce the list or upgrade your plan.`);
     }
@@ -199,7 +199,7 @@ export default function Bulk() {
             </label>
           )}
 
-          {me && !me?.features?.bulk && (
+          {me && !me?.features?.bulk && !me?.isAdmin && (
             <div className="alert warn" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
               <div>
                 <strong>Bulk QR creation requires Pro or Business</strong>
@@ -208,11 +208,15 @@ export default function Bulk() {
               <Link to="/pricing" className="primary-link" style={{ padding: "8px 16px", fontSize: 13, textDecoration: "none" }}>Upgrade to Pro →</Link>
             </div>
           )}
-          {me?.features?.bulk && remainingDynamic !== null && (
+          {me?.isAdmin ? (
+            <p className="field-hint" style={{ margin: "6px 0 10px", color: "var(--qp-brand)", fontWeight: 700 }}>
+              👑 Admin Unlimited Access active · No quota caps · Max {MAX_ROWS} per batch
+            </p>
+          ) : me?.features?.bulk && remainingDynamic !== null ? (
             <p className="field-hint" style={{ margin: "6px 0 10px" }}>
               Plan: <b>{String(me.plan || "pro").toUpperCase()}</b> · Remaining editable codes: <b>{remainingDynamic}</b> of {me?.limits?.dynamicQrs} · Batch cap: {MAX_ROWS}
             </p>
-          )}
+          ) : null}
           {error && (
             <div className="alert error">
               {error}
@@ -222,7 +226,7 @@ export default function Bulk() {
           {done && <div className="alert success">{done}</div>}
           {progress && <p className="field-hint">{progress}</p>}
 
-          {me && !me?.features?.bulk ? (
+          {me && !me?.features?.bulk && !me?.isAdmin ? (
             <Link to="/pricing" className="primary" style={{ display: "block", textAlign: "center", textDecoration: "none" }}>
               Upgrade to Pro to create bulk QR codes
             </Link>
