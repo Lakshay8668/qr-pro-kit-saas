@@ -16,7 +16,7 @@ export default function Pricing() {
   const { user } = useAuth();
   const { me } = useBilling(user);
   const [params] = useSearchParams();
-  const [interval, setIntervalValue] = useState("yearly");
+  const [interval, setIntervalValue] = useState("monthly");
   const [providers, setProviders] = useState(null);
   const [provider, setProvider] = useState("");
   const [busy, setBusy] = useState("");

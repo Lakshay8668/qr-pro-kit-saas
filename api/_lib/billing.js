@@ -1,6 +1,7 @@
 // api/_lib/billing.js — the customer-facing billing API behind /pricing and /billing.
 //
 // GET  ?action=config                      -> { providers: { stripe, razorpay } }      (public)
+// GET  ?action=diagnose                    -> safe diagnostic report for gateways & plans
 // GET  ?action=me                          -> plan, limits, usage, subscription state  (signed in)
 // POST ?action=checkout {plan,interval,provider} -> { url, subscriptionId?, keyId? } redirect or popup
 // POST ?action=verify-razorpay             -> verify payment signature and activate plan
@@ -8,7 +9,13 @@
 // POST ?action=cancel                      -> { ok }          cancel at the end of the paid period
 
 import { PLANS, entitlementsFor, isPaidPlan, isInterval } from "../../shared/plans.js";
-import { planEnvKey, verifySubscriptionPaymentSignature } from "./providers.js";
+import {
+  planEnvKey,
+  cleanPlanId,
+  maskPlanId,
+  getRazorpayPlanEnvConfig,
+  verifySubscriptionPaymentSignature,
+} from "./providers.js";
 import { countLinks, monthKey, usageId } from "./quota.js";
 import { ensureUser } from "./userStore.js";
 import { applyState } from "./subscriptions.js";
@@ -38,8 +45,124 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
     try {
       const action = String(req.query?.action || "");
 
-      if (req.method === "GET" && action === "config") return json(res, 200, { providers: providersEnabled(env()) });
+      // ------------------------------------------------------------------ public config
+      if (req.method === "GET" && action === "config") {
+        return json(res, 200, { providers: providersEnabled(env()) });
+      }
 
+      // ------------------------------------------------------------------ safe diagnostic report
+      if (req.method === "GET" && action === "diagnose") {
+        const e = env();
+        const rzpConfigured = !!(e.RAZORPAY_KEY_ID && e.RAZORPAY_KEY_SECRET);
+        const stripeConfigured = !!e.STRIPE_SECRET_KEY;
+        const keyId = cleanPlanId(e.RAZORPAY_KEY_ID);
+        const keyMode = keyId.startsWith("rzp_test_") ? "test" : keyId.startsWith("rzp_live_") ? "live" : "unknown";
+
+        const diag = {
+          timestamp: new Date().toISOString(),
+          providers: {
+            stripe: stripeConfigured,
+            razorpay: rzpConfigured,
+          },
+          razorpay: {
+            configured: rzpConfigured,
+            keyIdPreview: maskPlanId(keyId),
+            keyMode,
+            keySecretConfigured: !!e.RAZORPAY_KEY_SECRET,
+            webhookSecretConfigured: !!e.RAZORPAY_WEBHOOK_SECRET,
+            authStatus: "unchecked",
+            accountPlans: [],
+            configuredPlans: {},
+            recommendations: [],
+          },
+        };
+
+        if (rzpConfigured) {
+          const rzp = makeRazorpay();
+          try {
+            const listRes = await rzp.listPlans(50);
+            diag.razorpay.authStatus = "authenticated";
+            diag.razorpay.accountPlans = (listRes?.items || []).map((p) => ({
+              id: p.id,
+              name: p.item?.name || "(unnamed)",
+              amount: (p.item?.amount || 0) / 100,
+              currency: p.item?.currency || "INR",
+              period: p.period,
+              interval: p.interval,
+              active: p.item?.active !== false,
+            }));
+          } catch (authErr) {
+            diag.razorpay.authStatus = `failed: ${authErr.message}`;
+          }
+
+          // Check each required plan configuration
+          for (const plan of ["pro", "business"]) {
+            for (const interval of ["monthly", "yearly"]) {
+              const cfg = getRazorpayPlanEnvConfig(e, plan, interval);
+              const targetAmount = PLANS[plan].price[interval];
+              const planKey = `${plan}_${interval}`;
+
+              const info = {
+                envVar: cfg.key,
+                configuredId: maskPlanId(cfg.value),
+                isSet: !!cfg.value,
+                valid: false,
+                status: "not_checked",
+                matchedAccountPlan: null,
+              };
+
+              if (cfg.value) {
+                // Check if this ID exists in accountPlans
+                const foundInList = diag.razorpay.accountPlans.find((p) => p.id === cfg.value);
+                if (foundInList) {
+                  info.valid = true;
+                  info.status = "valid";
+                  info.matchedAccountPlan = foundInList;
+                } else if (diag.razorpay.authStatus === "authenticated") {
+                  try {
+                    const fetched = await rzp.getPlan(cfg.value);
+                    info.valid = true;
+                    info.status = "valid";
+                    info.matchedAccountPlan = {
+                      id: fetched.id,
+                      name: fetched.item?.name,
+                      amount: (fetched.item?.amount || 0) / 100,
+                      period: fetched.period,
+                    };
+                  } catch (pErr) {
+                    info.valid = false;
+                    info.status = `invalid: ${pErr.message}`;
+                  }
+                }
+              } else {
+                info.status = "unset";
+              }
+
+              // Recommendation if invalid or unset
+              if (!info.valid && diag.razorpay.accountPlans.length > 0) {
+                const autoMatch = diag.razorpay.accountPlans.find(
+                  (p) => p.period === interval && p.amount === targetAmount
+                );
+                if (autoMatch) {
+                  diag.razorpay.recommendations.push(
+                    `Found matching ${PLANS[plan].name} ${interval} plan in Razorpay (${autoMatch.id}, ₹${autoMatch.amount}/${autoMatch.period}). Set ${cfg.key}=${autoMatch.id} in Railway.`
+                  );
+                } else {
+                  diag.razorpay.recommendations.push(
+                    `No plan with amount ₹${targetAmount}/${interval} found in Razorpay account. Create a ${interval} plan for ₹${targetAmount} in Razorpay Dashboard and set ${cfg.key}.`
+                  );
+                }
+              }
+
+              diag.razorpay.configuredPlans[planKey] = info;
+            }
+          }
+        }
+
+        return json(res, 200, diag);
+      }
+
+      // Authentication required for remaining endpoints
       const token = String(req.headers.authorization || req.headers.Authorization || "").replace(/^Bearer\s+/i, "");
       if (!token) return json(res, 401, { error: "sign_in_required", message: "Please sign in first." });
       let me;
@@ -108,7 +231,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
 
         const base = originOf(req);
         if (provider === "stripe") {
-          const providerPlanId = e[planEnvKey("stripe", plan, interval)];
+          const providerPlanId = cleanPlanId(e[planEnvKey("stripe", plan, interval)]);
           if (!providerPlanId) {
             return json(res, 503, { error: "not_configured", message: `Stripe ${PLANS[plan].name} (${interval}) price is not set up.` });
           }
@@ -121,10 +244,28 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         }
 
         // Razorpay checkout
-        let providerPlanId = e[planEnvKey("razorpay", plan, interval)];
+        const cfg = getRazorpayPlanEnvConfig(e, plan, interval);
+        let providerPlanId = cfg.value;
         const rzp = makeRazorpay();
 
-        // If RAZORPAY_PLAN_* is not explicitly set, auto-provision or load cached plan from DB
+        // 1. If not configured in env, attempt auto-discovery from user's live Razorpay account
+        if (!providerPlanId) {
+          try {
+            const listRes = await rzp.listPlans(50).catch(() => null);
+            const targetAmount = PLANS[plan].price[interval];
+            const matchingPlan = (listRes?.items || []).find(
+              (p) => p.period === interval && (p.item?.amount === targetAmount * 100 || (p.item?.name || "").toLowerCase().includes(plan))
+            );
+            if (matchingPlan) {
+              console.log(`[Billing] Auto-discovered plan for ${plan} (${interval}) from account: ${matchingPlan.id}`);
+              providerPlanId = cleanPlanId(matchingPlan.id);
+            }
+          } catch (discErr) {
+            console.warn("[Billing] Plan discovery note:", discErr.message);
+          }
+        }
+
+        // 2. If still not configured, check DB plan cache or attempt auto-creation
         if (!providerPlanId) {
           try {
             const planCacheRef = db.collection("config").doc("razorpay_plans");
@@ -132,7 +273,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
             const planCache = planCacheDoc.exists ? planCacheDoc.data() : {};
             const cacheKey = `${plan}_${interval}`;
             if (planCache[cacheKey]) {
-              providerPlanId = planCache[cacheKey];
+              providerPlanId = cleanPlanId(planCache[cacheKey]);
             } else {
               const amountPaise = (PLANS[plan].price[interval] || 0) * 100;
               const createdPlan = await rzp.createPlan({
@@ -143,7 +284,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
                 currency: "INR",
                 description: `${PLANS[plan].name} Plan Subscription`,
               });
-              providerPlanId = createdPlan.id;
+              providerPlanId = cleanPlanId(createdPlan.id);
               await planCacheRef.set({ [cacheKey]: providerPlanId }, { merge: true });
             }
           } catch (planErr) {
@@ -154,11 +295,70 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         if (!providerPlanId) {
           return json(res, 503, {
             error: "not_configured",
-            message: `${PLANS[plan].name} (${interval}) isn't set up yet. Set ${planEnvKey("razorpay", plan, interval)} in environment variables.`,
+            message: `${PLANS[plan].name} (${interval}) isn't set up yet. Set ${cfg.key} in Railway environment variables.`,
           });
         }
 
-        const s = await rzp.createSubscription({ planId: providerPlanId, uid: me.uid, plan, interval });
+        // 3. Attempt subscription creation, with auto-recovery if configured planId is invalid
+        let s = null;
+        try {
+          s = await rzp.createSubscription({ planId: providerPlanId, uid: me.uid, plan, interval });
+        } catch (subErr) {
+          console.warn(`[Billing] Initial subscription creation failed for planId "${maskPlanId(providerPlanId)}":`, subErr.message);
+
+          // If Razorpay returns "The ID provided is invalid or could not be found", inspect the account to recover or give actionable diagnostic!
+          if (
+            subErr.message?.includes("invalid or could not be found") ||
+            subErr.message?.includes("does not exist") ||
+            subErr.status === 400
+          ) {
+            let accountPlansList = null;
+            try {
+              accountPlansList = await rzp.listPlans(50);
+            } catch (listErr) {
+              console.warn("[Billing] Could not fetch account plans list:", listErr.message);
+            }
+
+            const items = accountPlansList?.items || [];
+            const targetAmount = PLANS[plan].price[interval];
+            const candidate = items.find(
+              (p) => p.period === interval && (p.item?.amount === targetAmount * 100 || (p.item?.name || "").toLowerCase().includes(plan))
+            );
+
+            if (candidate && candidate.id !== providerPlanId) {
+              console.log(`[Billing] Auto-recovering: Found matching plan in Razorpay account: ${candidate.id}. Retrying subscription.`);
+              try {
+                s = await rzp.createSubscription({ planId: candidate.id, uid: me.uid, plan, interval });
+                providerPlanId = candidate.id;
+              } catch (retryErr) {
+                console.error("[Billing] Retry subscription creation failed:", retryErr.message);
+              }
+            }
+
+            if (!s) {
+              const summary = items.length
+                ? items.map((p) => `${p.id} (${p.item?.name || p.period} - ₹${(p.item?.amount || 0) / 100})`).join(", ")
+                : "No plans found in this Razorpay account";
+
+              const errMsg = `The configured Razorpay plan ID for ${PLANS[plan].name} (${interval}) is invalid. ` +
+                `Railway variable ${cfg.key} has "${maskPlanId(providerPlanId)}", which was not found in your Razorpay account (${maskPlanId(e.RAZORPAY_KEY_ID)}). ` +
+                `Available plans in your account: [${summary}]. ` +
+                `Please update ${cfg.key} in Railway to match your Razorpay plan ID.`;
+
+              console.error("[Billing]", errMsg);
+              return json(res, 400, {
+                error: "invalid_plan_id",
+                message: errMsg,
+                configuredVar: cfg.key,
+                configuredId: maskPlanId(providerPlanId),
+                availablePlans: items.map((p) => ({ id: p.id, name: p.item?.name, amount: (p.item?.amount || 0) / 100, period: p.period })),
+              });
+            }
+          } else {
+            throw subErr;
+          }
+        }
+
         const checkoutUrl = s.short_url || `https://rzp.io/i/${s.id}`;
         return json(res, 200, {
           url: checkoutUrl,
@@ -171,9 +371,9 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
 
       // ------------------------------------------------------------------ verify-razorpay (client signature verification)
       if (action === "verify-razorpay") {
-        const paymentId = String(body.razorpay_payment_id || "");
-        const subscriptionId = String(body.razorpay_subscription_id || "");
-        const signature = String(body.razorpay_signature || "");
+        const paymentId = cleanPlanId(body.razorpay_payment_id || "");
+        const subscriptionId = cleanPlanId(body.razorpay_subscription_id || "");
+        const signature = cleanPlanId(body.razorpay_signature || "");
         const plan = String(body.plan || "");
         const interval = String(body.interval || "monthly");
 

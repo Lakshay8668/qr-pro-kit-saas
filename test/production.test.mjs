@@ -438,6 +438,8 @@ console.log("Running production repair & verification tests...");
     }),
     makeStripe: () => ({}),
     makeRazorpay: () => ({
+      listPlans: async () => ({ items: [] }),
+      getPlan: async () => ({}),
       createPlan: async (planArgs) => {
         provisionedPlan = planArgs;
         return { id: "plan_auto_pro_monthly_999" };
@@ -534,6 +536,82 @@ console.log("Running production repair & verification tests...");
   assert.equal(res.body.limits.dynamicQrs, 50);
   assert.equal(res.body.features.password, true);
   ok("GET ?action=me immediately reflects active upgraded subscription");
+}
+
+// ------------------------------------------------------------------ 6. Safe Billing Diagnostics & Invalid ID Auto-Recovery
+{
+  const db = createUniversalDb();
+  const testSecret = "rzp_secret_production_test_888";
+
+  const liveAccountPlans = [
+    {
+      id: "plan_test_pro_m_real",
+      period: "monthly",
+      interval: 1,
+      item: { name: "Pro Monthly", amount: 29900, currency: "INR", active: true },
+    },
+    {
+      id: "plan_test_biz_m_real",
+      period: "monthly",
+      interval: 1,
+      item: { name: "Business Monthly", amount: 99900, currency: "INR", active: true },
+    },
+  ];
+
+  const handler = createBillingHandler({
+    getDb: () => db,
+    verify: async () => ({ uid: "user_test_diag", email: "diag@example.com" }),
+    env: () => ({
+      RAZORPAY_KEY_ID: "rzp_test_myValidKey123",
+      RAZORPAY_KEY_SECRET: testSecret,
+      RAZORPAY_PLAN_PRO_MONTHLY: " plan_invalid_id_from_other_account ", // Contains spaces & invalid ID
+    }),
+    makeStripe: () => ({}),
+    makeRazorpay: () => ({
+      listPlans: async () => ({ items: liveAccountPlans }),
+      getPlan: async (id) => {
+        const found = liveAccountPlans.find((p) => p.id === id);
+        if (found) return found;
+        throw new Error("The ID provided is invalid or could not be found.");
+      },
+      createSubscription: async ({ planId, uid, plan, interval }) => {
+        if (planId === "plan_invalid_id_from_other_account") {
+          const err = new Error("The ID provided is invalid or could not be found.");
+          err.status = 400;
+          throw err;
+        }
+        return { id: `sub_real_${planId}`, short_url: `https://rzp.io/i/${planId}` };
+      },
+    }),
+    serverTs: () => new Date(),
+    now: () => Date.now(),
+  });
+
+  // A. Diagnostics reports key mode, invalid configured plan, and available account plans
+  let res = await callJson(handler, {
+    method: "GET",
+    query: { action: "diagnose" },
+  });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.razorpay.keyMode, "test");
+  assert.equal(res.body.razorpay.authStatus, "authenticated");
+  assert.equal(res.body.razorpay.accountPlans.length, 2);
+  assert.equal(res.body.razorpay.configuredPlans.pro_monthly.isSet, true);
+  assert.equal(res.body.razorpay.configuredPlans.pro_monthly.valid, false);
+  assert.ok(res.body.razorpay.recommendations.length > 0);
+  ok("GET ?action=diagnose accurately identifies invalid plan and recommends real account plan");
+
+  // B. Checkout with invalid plan ID auto-recovers using matching plan from live account
+  res = await callJson(handler, {
+    method: "POST",
+    headers: { Authorization: "Bearer test_token" },
+    query: { action: "checkout" },
+    body: { plan: "pro", interval: "monthly", provider: "razorpay" },
+  });
+  assert.equal(res.code, 200);
+  assert.equal(res.body.url, "https://rzp.io/i/plan_test_pro_m_real");
+  assert.equal(res.body.subscriptionId, "sub_real_plan_test_pro_m_real");
+  ok("checkout automatically recovers from invalid configured plan ID using account discovery");
 }
 
 console.log("\nAll production repair & verification tests passed!\n");
