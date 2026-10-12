@@ -133,12 +133,24 @@ port = server.address().port;
   ok("unknown /api/* endpoint returns 404 JSON");
 }
 
-// 7. Static asset and SPA fallback (when dist is present)
+// 7. Config endpoint
+{
+  const r = await request("/api/config");
+  assert.equal(r.status, 200);
+  assert.equal(typeof r.body, "object");
+  assert.ok("apiKey" in r.body);
+  assert.ok("projectId" in r.body);
+  assert.ok("authDomain" in r.body);
+  ok("GET /api/config returns safe public client config object");
+}
+
+// 8. Static asset and SPA fallback with injected config
 {
   const r = await request("/pricing");
   assert.equal(r.status, 200);
   assert.ok(r.headers["content-type"].includes("text/html"));
-  ok("SPA routes (/pricing) return 200 with HTML from dist/index.html");
+  assert.ok(r.raw.includes("window.__APP_CONFIG__"));
+  ok("SPA routes (/pricing) return 200 with window.__APP_CONFIG__ injected");
 }
 
 // Close server

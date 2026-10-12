@@ -6,31 +6,67 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
+// Resolve configuration: prefer runtime injected window.__APP_CONFIG__ (from Railway server), fallback to Vite build-time env
+const runtimeConfig = (typeof window !== "undefined" && window.__APP_CONFIG__) || {};
+
 export const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "",
+  apiKey: runtimeConfig.apiKey || import.meta.env.VITE_FIREBASE_API_KEY || "",
+  authDomain: runtimeConfig.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: runtimeConfig.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: runtimeConfig.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: runtimeConfig.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: runtimeConfig.appId || import.meta.env.VITE_FIREBASE_APP_ID || "",
 };
+
+export function isValidApiKey(key) {
+  if (!key || typeof key !== "string") return false;
+  const trimmed = key.trim();
+  if (!trimmed || trimmed === "undefined" || trimmed === "null") return false;
+  if (trimmed.includes("your_") || trimmed.includes("your-api-key")) return false;
+  return trimmed.length >= 10;
+}
 
 // Check if credentials appear configured (not placeholder / not empty)
 export const isFirebaseConfigured = Boolean(
-  firebaseConfig.apiKey &&
+  isValidApiKey(firebaseConfig.apiKey) &&
   firebaseConfig.projectId &&
-  !firebaseConfig.apiKey.includes("your_") &&
+  !firebaseConfig.projectId.includes("your_") &&
   !firebaseConfig.projectId.includes("your-project-id")
 );
 
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+let app = null;
+let auth = null;
+let db = null;
+let initError = null;
 
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+if (isFirebaseConfigured) {
+  try {
+    app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (err) {
+    console.warn("[Firebase] Could not initialize Firebase services:", err.message);
+    initError = err.message;
+    app = null;
+    auth = null;
+    db = null;
+  }
+} else {
+  console.info(
+    "[Firebase] Client credentials are not configured or are incomplete. " +
+    "Public features (static QR creation, pricing comparison, styling) remain active. " +
+    "To enable user accounts and dashboard sync, configure VITE_FIREBASE_API_KEY and VITE_FIREBASE_PROJECT_ID."
+  );
+}
+
+export { app, auth, db, initError };
 
 // Lazy storage instance — does NOT initialize or import firebase/storage on app load
 let _storage = null;
 export async function getStorageInstance() {
+  if (!app) {
+    throw new Error("Firebase is not configured. Please provide Firebase credentials to use Cloud Storage.");
+  }
   if (!isStorageConfigured()) {
     throw new Error(
       `Firebase Cloud Storage is not enabled for project "${firebaseConfig.projectId || "delta-abbey-4f38q"}". ` +

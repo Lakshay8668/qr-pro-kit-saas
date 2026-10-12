@@ -19,11 +19,18 @@ import { cleanBio, cleanDesign, cleanDestinations, cleanMax } from "../../shared
 
 export { cleanBio };
 
-const linksCol = collection(db, "links");
+const getLinksCol = () => (db ? collection(db, "links") : null);
 const toTs = (date) => (date ? Timestamp.fromDate(date) : null);
 
 /** Public base for QR links — set VITE_PUBLIC_BASE_URL to use your own short domain. */
-export const publicBase = () => (import.meta.env.VITE_PUBLIC_BASE_URL || window.location.origin).replace(/\/+$/, "");
+export const publicBase = () => {
+  const runtimeConfig = (typeof window !== "undefined" && window.__APP_CONFIG__) || {};
+  return (
+    runtimeConfig.publicBaseUrl ||
+    import.meta.env.VITE_PUBLIC_BASE_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "")
+  ).replace(/\/+$/, "");
+};
 export const dynamicUrlFor = (id) => `${publicBase()}/q/${id}`;
 
 function toServerLink({
@@ -73,6 +80,7 @@ export async function updateLink(id, patch = {}) {
   if ("maxScans" in patch) out.maxScans = cleanMax(patch.maxScans);
   if ("design" in patch) out.design = cleanDesign(patch.design);
   if (!Object.keys(out).length) return;
+  if (!db) throw new Error("Cloud Firestore is not available. Configure Firebase credentials to update dynamic links.");
   try {
     await updateDoc(doc(db, "links", id), out);
   } catch (e) {
@@ -87,6 +95,7 @@ export const updateDestination = (id, destination) => updateLink(id, { destinati
 export const renameLink = (id, label) => updateLink(id, { label });
 
 export async function deleteLink(id) {
+  if (!db) throw new Error("Cloud Firestore is not available. Configure Firebase credentials to delete dynamic links.");
   const scansCol = collection(db, "links", id, "scans");
   for (let i = 0; i < 25; i++) {
     const snap = await getDocs(query(scansCol, limit(400)));
@@ -100,7 +109,8 @@ export async function deleteLink(id) {
 
 export function subscribeToMyLinks(ownerId, callback, onError) {
   const status = getFirestoreStatus();
-  if (status.available === false) {
+  const col = getLinksCol();
+  if (!db || !col || status.available === false) {
     if (onError) onError(new Error(status.error || "Cloud Firestore is not available."));
     callback([]);
     return () => {};
@@ -108,7 +118,7 @@ export function subscribeToMyLinks(ownerId, callback, onError) {
 
   let unsub = () => {};
   try {
-    const q = query(linksCol, where("ownerId", "==", ownerId));
+    const q = query(col, where("ownerId", "==", ownerId));
     unsub = onSnapshot(
       q,
       (snap) => {
@@ -145,7 +155,7 @@ export function subscribeToMyLinks(ownerId, callback, onError) {
 
 export function subscribeToScans(id, callback, onError) {
   const status = getFirestoreStatus();
-  if (status.available === false) {
+  if (!db || status.available === false) {
     if (onError) onError(new Error(status.error || "Cloud Firestore is not available."));
     callback([]);
     return () => {};

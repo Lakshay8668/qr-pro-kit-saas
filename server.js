@@ -115,6 +115,51 @@ function serveStaticFile(filePath, res) {
   stream.pipe(res);
 }
 
+export function getPublicClientConfig() {
+  const env = process.env;
+  let projectId = env.VITE_FIREBASE_PROJECT_ID || env.FIREBASE_PROJECT_ID || "";
+  if (!projectId && env.FIREBASE_SERVICE_ACCOUNT) {
+    try {
+      const sa = JSON.parse(env.FIREBASE_SERVICE_ACCOUNT);
+      if (sa.project_id) projectId = sa.project_id;
+    } catch {}
+  }
+
+  const publicBaseUrl =
+    env.VITE_PUBLIC_BASE_URL ||
+    (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : "");
+
+  return {
+    apiKey: env.VITE_FIREBASE_API_KEY || env.FIREBASE_API_KEY || "",
+    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || env.FIREBASE_AUTH_DOMAIN || (projectId ? `${projectId}.firebaseapp.com` : ""),
+    projectId: projectId,
+    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || env.FIREBASE_STORAGE_BUCKET || (projectId ? `${projectId}.appspot.com` : ""),
+    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || env.FIREBASE_MESSAGING_SENDER_ID || "",
+    appId: env.VITE_FIREBASE_APP_ID || env.FIREBASE_APP_ID || "",
+    publicBaseUrl,
+  };
+}
+
+function serveIndexHtml(res) {
+  const indexPath = path.join(DIST_DIR, "index.html");
+  if (!fs.existsSync(indexPath)) return false;
+  let html = fs.readFileSync(indexPath, "utf8");
+  const config = getPublicClientConfig();
+  const scriptTag = `<script id="__QR_PRO_CONFIG__">window.__APP_CONFIG__ = ${JSON.stringify(config)};</script>`;
+  if (html.includes("</head>")) {
+    html = html.replace("</head>", `${scriptTag}</head>`);
+  } else {
+    html = `${scriptTag}${html}`;
+  }
+  const buffer = Buffer.from(html, "utf8");
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Content-Length", buffer.length);
+  res.setHeader("Cache-Control", "no-cache");
+  res.end(buffer);
+  return true;
+}
+
 const server = http.createServer(async (req, res) => {
   setCorsHeaders(req, res);
 
@@ -127,7 +172,7 @@ const server = http.createServer(async (req, res) => {
   const pathname = url.pathname;
   req.query = Object.fromEntries(url.searchParams.entries());
 
-  // 1. Health checks
+  // 1. Health checks & config endpoints
   if (pathname === "/health" || pathname === "/api/health") {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -140,6 +185,13 @@ const server = http.createServer(async (req, res) => {
         timestamp: new Date().toISOString(),
       })
     );
+  }
+
+  if (pathname === "/api/config") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    return res.end(JSON.stringify(getPublicClientConfig()));
   }
 
   // 2. Dynamic QR redirect: /q/:id
@@ -219,16 +271,13 @@ const server = http.createServer(async (req, res) => {
     const filePath = path.join(DIST_DIR, safePath);
 
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+      if (path.basename(filePath).toLowerCase() === "index.html") {
+        return serveIndexHtml(res);
+      }
       return serveStaticFile(filePath, res);
     }
 
-    const indexPath = path.join(DIST_DIR, "index.html");
-    if (fs.existsSync(indexPath)) {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      return fs.createReadStream(indexPath).pipe(res);
-    }
+    if (serveIndexHtml(res)) return;
   }
 
   // Dist not built yet

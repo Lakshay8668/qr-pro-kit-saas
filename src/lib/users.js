@@ -6,7 +6,7 @@ const done = new Set();
 
 export async function ensureUserDoc(user) {
   if (!user || done.has(user.uid)) return;
-  if (getFirestoreStatus().available === false) return; // Don't query nonexistent database
+  if (!db || getFirestoreStatus().available === false) return; // Don't query nonexistent database
 
   done.add(user.uid);
   try {

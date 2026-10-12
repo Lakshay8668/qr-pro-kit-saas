@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../lib/useAuth";
 
 export default function AuthForm() {
-  const { login, signup, resetPassword, loginWithGoogle } = useAuth();
+  const { login, signup, resetPassword, loginWithGoogle, isConfigured } = useAuth();
   const [mode, setMode] = useState("login"); // login | signup | reset
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -94,12 +94,21 @@ export default function AuthForm() {
           {mode === "reset" && "We'll email you a link to set a new password."}
         </p>
 
+        {!isConfigured && (
+          <div className="alert error" style={{ textAlign: "left", fontSize: "13px", lineHeight: "1.4", marginBottom: "16px" }}>
+            <strong>Firebase Setup Required</strong>
+            <p style={{ margin: "4px 0 0 0" }}>
+              Firebase credentials have not been configured yet. In your Railway service dashboard, set <code>VITE_FIREBASE_API_KEY</code> and <code>VITE_FIREBASE_PROJECT_ID</code> to enable authentication and saved QR codes.
+            </p>
+          </div>
+        )}
+
         {mode !== "reset" && (
           <button
             type="button"
             className="google-btn"
             onClick={handleGoogle}
-            disabled={loading}
+            disabled={loading || !isConfigured}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" style={{ marginRight: 10 }}>
               <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -160,7 +169,7 @@ export default function AuthForm() {
         {error && <p className="dash-error">{error}</p>}
         {notice && <p className="dash-notice">{notice}</p>}
 
-        <button type="submit" disabled={loading}>
+        <button type="submit" disabled={loading || !isConfigured}>
           {loading
             ? mode === "reset"
               ? "Sending…"

@@ -11,6 +11,11 @@ import { Bars } from "../components/Charts";
 import { dynamicUrlFor } from "../lib/links";
 
 async function api(action, { method = "GET", body, query = "" } = {}) {
+  if (!auth?.currentUser) {
+    const err = new Error("Authentication required. Please sign in as an admin.");
+    err.status = 401;
+    throw err;
+  }
   const token = await auth.currentUser.getIdToken();
   const res = await fetch(`/api/admin?action=${action}${query}`, {
     method,
