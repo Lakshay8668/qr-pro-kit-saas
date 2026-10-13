@@ -40,27 +40,32 @@ export default function AppShell({
 
   const handleNavClick = (tabKey, route) => {
     setMobileMenuOpen(false);
-    if (route) {
-      navigate(route);
-    } else if (onTabChange) {
-      if (location.pathname !== "/dashboard") {
-        navigate("/dashboard");
-      }
+    const target = route || (tabKey === "links" ? "/dashboard?tab=links" : `/dashboard?tab=${tabKey}`);
+    navigate(target);
+    if (onTabChange) {
       onTabChange(tabKey);
     }
   };
 
   const navItems = [
-    { key: "overview", label: "Overview", icon: IconDashboard },
-    { key: "links", label: "My QR Codes", icon: IconQrCode },
+    { key: "overview", label: "Overview", icon: IconDashboard, route: "/dashboard?tab=overview", altRoute: "/overview" },
+    { key: "links", label: "My QR Codes", icon: IconQrCode, route: "/dashboard?tab=links", altRoute: "/links" },
     { key: "create", label: "Create QR Code", icon: IconPlus, route: "/" },
     { key: "bulk", label: "Bulk Create", icon: IconBulk, route: "/bulk" },
-    { key: "analytics", label: "Analytics", icon: IconChart },
-    { key: "folders", label: "Folders", icon: IconFolder },
+    { key: "analytics", label: "Analytics", icon: IconChart, route: "/dashboard?tab=analytics", altRoute: "/analytics" },
+    { key: "folders", label: "Folders", icon: IconFolder, route: "/dashboard?tab=folders", altRoute: "/folders" },
     { key: "billing", label: "Plan & Billing", icon: IconBilling, route: "/billing" },
-    { key: "settings", label: "Settings", icon: IconSettings },
-    { key: "help", label: "Help & FAQ", icon: IconHelp },
+    { key: "settings", label: "Settings", icon: IconSettings, route: "/dashboard?tab=settings", altRoute: "/settings" },
+    { key: "help", label: "Help & FAQ", icon: IconHelp, route: "/dashboard?tab=help", altRoute: "/help" },
   ];
+
+  const isItemActive = (item) => {
+    if (currentTab && currentTab === item.key) return true;
+    if (item.route && location.pathname === item.route) return true;
+    if (item.altRoute && location.pathname === item.altRoute) return true;
+    if (item.key === "links" && location.pathname === "/dashboard" && (!location.search || location.search.includes("tab=links"))) return true;
+    return false;
+  };
 
   return (
     <div className="bitly-layout">
@@ -107,10 +112,7 @@ export default function AppShell({
           <div className="nav-group-title">MANAGE</div>
           {navItems.slice(0, 6).map((item) => {
             const Icon = item.icon;
-            const isActive =
-              item.route
-                ? location.pathname === item.route
-                : location.pathname === "/dashboard" && currentTab === item.key;
+            const isActive = isItemActive(item);
             return (
               <button
                 key={item.key}
@@ -130,10 +132,7 @@ export default function AppShell({
           <div className="nav-group-title" style={{ marginTop: "18px" }}>ACCOUNT &amp; SUPPORT</div>
           {navItems.slice(6).map((item) => {
             const Icon = item.icon;
-            const isActive =
-              item.route
-                ? location.pathname === item.route
-                : location.pathname === "/dashboard" && currentTab === item.key;
+            const isActive = isItemActive(item);
             return (
               <button
                 key={item.key}
@@ -266,7 +265,7 @@ export default function AppShell({
                       className="dropdown-item"
                       onClick={() => {
                         setUserDropdownOpen(false);
-                        handleNavClick("overview");
+                        handleNavClick("overview", "/dashboard?tab=overview");
                       }}
                     >
                       <IconDashboard size={15} /> Overview
@@ -276,7 +275,7 @@ export default function AppShell({
                       className="dropdown-item"
                       onClick={() => {
                         setUserDropdownOpen(false);
-                        handleNavClick("links");
+                        handleNavClick("links", "/dashboard?tab=links");
                       }}
                     >
                       <IconQrCode size={15} /> My QR Codes

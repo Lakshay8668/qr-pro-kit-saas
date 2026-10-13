@@ -11,8 +11,8 @@ console.log("Running UI & QR Editing tests...");
 
 // Mock token verifier
 const mockVerify = async (token) => {
-  if (token === "token_user_1") return { uid: "user_1", email: "user1@example.com" };
-  if (token === "token_user_2") return { uid: "user_2", email: "user2@example.com" };
+  if (token === "token_user_1") return { uid: "ui_user_1", email: "user1@example.com" };
+  if (token === "token_user_2") return { uid: "ui_user_2", email: "user2@example.com" };
   throw new Error("Invalid token");
 };
 

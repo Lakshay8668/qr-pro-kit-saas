@@ -2,7 +2,7 @@
 // Multi-tenant, secure, persistent QR management with Overview, My QR Codes, Analytics, Folders, Settings & Help.
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useNavigate, useLocation } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import EditQrModal from "../components/EditQrModal";
 import Modal from "../components/Modal";
@@ -373,17 +373,23 @@ function LinkRow({ link, onEdit, onAnalytics }) {
 }
 
 // ---------------------------------------------------------------- Main Dashboard Page
-export default function Dashboard() {
+export default function Dashboard({ defaultTab }) {
   const { user, loading } = useAuth();
   const { me } = useBilling(user);
   const [links, setLinks] = useState([]);
   const [dbError, setDbError] = useState("");
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   // Tab: 'overview' | 'links' | 'analytics' | 'folders' | 'settings' | 'help'
-  const currentTab = searchParams.get("tab") || "links";
+  const validTabs = ["overview", "links", "analytics", "folders", "settings", "help"];
+  const pathSegment = location.pathname.replace(/^\//, "").split("/")[0];
+  const tabFromPath = validTabs.includes(pathSegment) ? pathSegment : null;
+  const currentTab = searchParams.get("tab") || tabFromPath || defaultTab || "links";
+
   const setTab = (tab) => {
-    setSearchParams({ tab });
+    navigate(`/dashboard?tab=${tab}`);
   };
 
   // Search & Filter state
@@ -488,7 +494,12 @@ export default function Dashboard() {
       currentTab={currentTab}
       onTabChange={setTab}
       searchQuery={searchQuery}
-      onSearchChange={setSearchQuery}
+      onSearchChange={(q) => {
+        setSearchQuery(q);
+        if (q && currentTab !== "links") {
+          setTab("links");
+        }
+      }}
       title={tabTitles[currentTab] || "My QR Codes"}
     >
       {/* DB Warning (if applicable) */}

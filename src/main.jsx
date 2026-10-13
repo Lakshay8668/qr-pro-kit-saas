@@ -27,6 +27,12 @@ ReactDOM.createRoot(document.getElementById("root")).render(
         <Routes>
           <Route path="/" element={<App />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/overview" element={<Dashboard defaultTab="overview" />} />
+          <Route path="/links" element={<Dashboard defaultTab="links" />} />
+          <Route path="/analytics" element={<Dashboard defaultTab="analytics" />} />
+          <Route path="/folders" element={<Dashboard defaultTab="folders" />} />
+          <Route path="/settings" element={<Dashboard defaultTab="settings" />} />
+          <Route path="/help" element={<Dashboard defaultTab="help" />} />
           <Route path="/bulk" element={<Bulk />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/pricing" element={<Pricing />} />
