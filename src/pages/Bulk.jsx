@@ -66,7 +66,7 @@ function parse(text) {
   return { rows, bad };
 }
 
-export default function Bulk() {
+export default function Bulk({ embedded = false }) {
   const { user, loading } = useAuth();
   const { me, refresh: refreshBilling } = useBilling(user);
   const [upgrade, setUpgrade] = useState(false);
@@ -241,23 +241,31 @@ export default function Bulk() {
       </section>
   );
 
+  const bulkContent = (
+    <div className="view-bulk-wrap">
+      <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
+        <div className="welcome-text-col">
+          <h2>Bulk QR Code Generator</h2>
+          <p>One line per QR: <code>label,url</code> — e.g. restaurant tables, products, branches. Generates a ZIP of branded PNGs + mapping CSV.</p>
+        </div>
+        <div className="welcome-action-col">
+          <Link to="/dashboard?tab=links" className="secondary-btn">
+            ← Back to My QR Codes
+          </Link>
+        </div>
+      </div>
+      {contentJsx}
+    </div>
+  );
+
+  if (embedded) {
+    return bulkContent;
+  }
+
   if (user) {
     return (
       <AppShell currentTab="bulk" title="Bulk Create QR Codes">
-        <div className="view-bulk-wrap">
-          <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
-            <div className="welcome-text-col">
-              <h2>Bulk QR Code Generator</h2>
-              <p>One line per QR: <code>label,url</code> — e.g. restaurant tables, products, branches. Generates a ZIP of branded PNGs + mapping CSV.</p>
-            </div>
-            <div className="welcome-action-col">
-              <Link to="/dashboard" className="secondary-btn">
-                ← Back to My QR Codes
-              </Link>
-            </div>
-          </div>
-          {contentJsx}
-        </div>
+        {bulkContent}
       </AppShell>
     );
   }

@@ -38,7 +38,7 @@ const PRESETS = [
   { name: "Royal", fg: "#1e3a8a", fg2: "#7c3aed", bg: "#ffffff" },
 ];
 
-export default function App() {
+export default function App({ embedded = false }) {
   const [type, setType] = useState("url");
   const [data, setData] = useState({});
   const [isDynamic, setIsDynamic] = useState(false);
@@ -541,23 +541,31 @@ export default function App() {
       </section>
   );
 
+  const generatorShellJsx = (
+    <div className="generator-shell-wrap">
+      <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
+        <div className="welcome-text-col">
+          <h2>Create Branded QR Code</h2>
+          <p>Choose a content type, customize shapes and colors, and save to your dashboard.</p>
+        </div>
+        <div className="welcome-action-col">
+          <Link to="/dashboard?tab=links" className="secondary-btn">
+            ← View My QR Codes
+          </Link>
+        </div>
+      </div>
+      {workspaceJsx}
+    </div>
+  );
+
+  if (embedded) {
+    return generatorShellJsx;
+  }
+
   if (user) {
     return (
       <AppShell currentTab="create" title="Create QR Code">
-        <div className="generator-shell-wrap">
-          <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
-            <div className="welcome-text-col">
-              <h2>Create Branded QR Code</h2>
-              <p>Choose a content type, customize shapes and colors, and save to your dashboard.</p>
-            </div>
-            <div className="welcome-action-col">
-              <Link to="/dashboard" className="secondary-btn">
-                ← View My QR Codes
-              </Link>
-            </div>
-          </div>
-          {workspaceJsx}
-        </div>
+        {generatorShellJsx}
       </AppShell>
     );
   }

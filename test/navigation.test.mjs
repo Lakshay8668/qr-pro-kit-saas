@@ -13,24 +13,24 @@ console.log("Running Navigation & Route verification tests...");
   const navItems = [
     { key: "overview", label: "Overview", route: "/dashboard?tab=overview", altRoute: "/overview" },
     { key: "links", label: "My QR Codes", route: "/dashboard?tab=links", altRoute: "/links" },
-    { key: "create", label: "Create QR Code", route: "/" },
-    { key: "bulk", label: "Bulk Create", route: "/bulk" },
+    { key: "create", label: "Create QR Code", route: "/dashboard?tab=create", altRoute: "/" },
+    { key: "bulk", label: "Bulk Create", route: "/dashboard?tab=bulk", altRoute: "/bulk" },
     { key: "analytics", label: "Analytics", route: "/dashboard?tab=analytics", altRoute: "/analytics" },
     { key: "folders", label: "Folders", route: "/dashboard?tab=folders", altRoute: "/folders" },
-    { key: "billing", label: "Plan & Billing", route: "/billing" },
+    { key: "billing", label: "Plan & Billing", route: "/dashboard?tab=billing", altRoute: "/billing" },
     { key: "settings", label: "Settings", route: "/dashboard?tab=settings", altRoute: "/settings" },
     { key: "help", label: "Help & FAQ", route: "/dashboard?tab=help", altRoute: "/help" },
   ];
 
-  // All 6 previously broken items must have defined routes
-  const targetKeys = ["overview", "links", "analytics", "folders", "settings", "help"];
-  for (const k of targetKeys) {
+  // All 9 items must have defined routes
+  const allKeys = ["overview", "links", "create", "bulk", "analytics", "folders", "billing", "settings", "help"];
+  for (const k of allKeys) {
     const item = navItems.find((i) => i.key === k);
     assert.ok(item, `nav item '${k}' must exist in navItems`);
     assert.ok(item.route, `nav item '${k}' must have an explicit route defined`);
     assert.ok(item.route.startsWith("/dashboard?tab="), `nav item '${k}' must navigate to /dashboard?tab=`);
   }
-  ok("All 6 sidebar items have explicit routes defined (no undefined route)");
+  ok("All 9 sidebar items have explicit routes defined (no undefined route)");
 
   // ------------------------------------------------------------------ 2. handleNavClick behavior
   const simulateNavClick = (tabKey, route, onTabChange) => {
@@ -48,7 +48,7 @@ console.log("Running Navigation & Route verification tests...");
   };
 
   // Case A: Click from Create QR Code page '/' where onTabChange is undefined
-  for (const k of targetKeys) {
+  for (const k of allKeys) {
     const item = navItems.find((i) => i.key === k);
     const res = simulateNavClick(item.key, item.route, undefined);
     assert.equal(res.navigatedTo, item.route, `Must navigate to ${item.route} even when onTabChange is undefined`);
@@ -56,7 +56,7 @@ console.log("Running Navigation & Route verification tests...");
   ok("Sidebar clicks from '/' without onTabChange navigate unconditionally to target route");
 
   // Case B: Click from Dashboard with onTabChange provided
-  for (const k of targetKeys) {
+  for (const k of allKeys) {
     const item = navItems.find((i) => i.key === k);
     let tabCalled = false;
     const res = simulateNavClick(item.key, item.route, (t) => { tabCalled = true; });
@@ -73,14 +73,14 @@ console.log("Running Navigation & Route verification tests...");
   // ------------------------------------------------------------------ 3. Active State Determination
   const isItemActive = (item, currentTab, location) => {
     if (currentTab && currentTab === item.key) return true;
-    if (item.route && location.pathname === item.route) return true;
+    if (item.route && (location.pathname + location.search) === item.route) return true;
     if (item.altRoute && location.pathname === item.altRoute) return true;
     if (item.key === "links" && location.pathname === "/dashboard" && (!location.search || location.search.includes("tab=links"))) return true;
     return false;
   };
 
   // Test active highlights for each tab on /dashboard?tab=...
-  for (const k of targetKeys) {
+  for (const k of allKeys) {
     const activeItem = navItems.find((i) => i.key === k);
     const loc = { pathname: "/dashboard", search: `?tab=${k}` };
     assert.equal(isItemActive(activeItem, k, loc), true, `Item '${k}' should be active when tab is '${k}'`);
@@ -94,13 +94,19 @@ console.log("Running Navigation & Route verification tests...");
   }
   ok("Active state correctly highlights active tab on /dashboard?tab=... and deactivates others");
 
-  // Test direct routes like /overview, /analytics, /folders
+  // Test direct routes like /overview, /analytics, /folders, /create, /bulk, /billing
   for (const k of ["overview", "analytics", "folders", "settings", "help"]) {
     const activeItem = navItems.find((i) => i.key === k);
     const loc = { pathname: `/${k}`, search: "" };
     assert.equal(isItemActive(activeItem, k, loc), true, `Item '${k}' should be active on direct route '/${k}'`);
   }
   ok("Active state correctly highlights active tab on direct routes (/overview, /analytics, etc.)");
+
+  // Direct standalone pages highlight their nav item correctly
+  assert.equal(isItemActive(navItems.find((i) => i.key === "create"), "create", { pathname: "/", search: "" }), true);
+  assert.equal(isItemActive(navItems.find((i) => i.key === "bulk"), "bulk", { pathname: "/bulk", search: "" }), true);
+  assert.equal(isItemActive(navItems.find((i) => i.key === "billing"), "billing", { pathname: "/billing", search: "" }), true);
+  ok("Direct paths ('/', '/bulk', '/billing') highlight their corresponding sidebar nav item");
 
   // Default dashboard without query params highlights 'links' (My QR Codes)
   const defaultLoc = { pathname: "/dashboard", search: "" };
@@ -136,11 +142,15 @@ console.log("Running Navigation & Route verification tests...");
 
   const testRoutes = [
     "/",
+    "/create",
     "/dashboard",
     "/dashboard?tab=overview",
     "/dashboard?tab=links",
+    "/dashboard?tab=create",
+    "/dashboard?tab=bulk",
     "/dashboard?tab=analytics",
     "/dashboard?tab=folders",
+    "/dashboard?tab=billing",
     "/dashboard?tab=settings",
     "/dashboard?tab=help",
     "/overview",

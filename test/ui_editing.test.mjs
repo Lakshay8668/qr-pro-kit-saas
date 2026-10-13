@@ -9,10 +9,10 @@ const ok = (m) => console.log(`  ✓ ${m}`);
 
 console.log("Running UI & QR Editing tests...");
 
-// Mock token verifier
+const runUid = "ui_user_" + Date.now();
 const mockVerify = async (token) => {
-  if (token === "token_user_1") return { uid: "ui_user_1", email: "user1@example.com" };
-  if (token === "token_user_2") return { uid: "ui_user_2", email: "user2@example.com" };
+  if (token === "token_user_1") return { uid: runUid, email: "user1@example.com" };
+  if (token === "token_user_2") return { uid: runUid + "_alt", email: "user2@example.com" };
   throw new Error("Invalid token");
 };
 

@@ -50,18 +50,18 @@ export default function AppShell({
   const navItems = [
     { key: "overview", label: "Overview", icon: IconDashboard, route: "/dashboard?tab=overview", altRoute: "/overview" },
     { key: "links", label: "My QR Codes", icon: IconQrCode, route: "/dashboard?tab=links", altRoute: "/links" },
-    { key: "create", label: "Create QR Code", icon: IconPlus, route: "/" },
-    { key: "bulk", label: "Bulk Create", icon: IconBulk, route: "/bulk" },
+    { key: "create", label: "Create QR Code", icon: IconPlus, route: "/dashboard?tab=create", altRoute: "/" },
+    { key: "bulk", label: "Bulk Create", icon: IconBulk, route: "/dashboard?tab=bulk", altRoute: "/bulk" },
     { key: "analytics", label: "Analytics", icon: IconChart, route: "/dashboard?tab=analytics", altRoute: "/analytics" },
     { key: "folders", label: "Folders", icon: IconFolder, route: "/dashboard?tab=folders", altRoute: "/folders" },
-    { key: "billing", label: "Plan & Billing", icon: IconBilling, route: "/billing" },
+    { key: "billing", label: "Plan & Billing", icon: IconBilling, route: "/dashboard?tab=billing", altRoute: "/billing" },
     { key: "settings", label: "Settings", icon: IconSettings, route: "/dashboard?tab=settings", altRoute: "/settings" },
     { key: "help", label: "Help & FAQ", icon: IconHelp, route: "/dashboard?tab=help", altRoute: "/help" },
   ];
 
   const isItemActive = (item) => {
     if (currentTab && currentTab === item.key) return true;
-    if (item.route && location.pathname === item.route) return true;
+    if (item.route && (location.pathname + location.search) === item.route) return true;
     if (item.altRoute && location.pathname === item.altRoute) return true;
     if (item.key === "links" && location.pathname === "/dashboard" && (!location.search || location.search.includes("tab=links"))) return true;
     return false;
@@ -101,10 +101,14 @@ export default function AppShell({
 
         {/* Primary Create Button */}
         <div className="sidebar-cta-wrap">
-          <Link to="/" className="sidebar-create-btn">
+          <button
+            type="button"
+            className="sidebar-create-btn"
+            onClick={() => handleNavClick("create", "/dashboard?tab=create")}
+          >
             <IconPlus size={18} />
             <span>Create QR Code</span>
-          </Link>
+          </button>
         </div>
 
         {/* Navigation list */}
@@ -221,18 +225,23 @@ export default function AppShell({
           </div>
 
           <div className="top-header-right">
-            <Link to="/" className="top-new-btn">
+            <button
+              type="button"
+              className="top-new-btn"
+              onClick={() => handleNavClick("create", "/dashboard?tab=create")}
+            >
               <IconPlus size={16} />
               <span>New QR</span>
-            </Link>
+            </button>
 
-            <Link
-              to="/billing"
+            <button
+              type="button"
               className={`top-plan-badge badge-${me?.isAdmin ? "admin" : me?.plan || "free"}`}
+              onClick={() => handleNavClick("billing", "/dashboard?tab=billing")}
               title="Click to view plan and usage"
             >
               {me?.isAdmin ? "👑 Admin" : `${currentPlan.name} Plan`}
-            </Link>
+            </button>
 
             {/* Profile Dropdown */}
             <div className="top-user-wrap">
@@ -280,13 +289,16 @@ export default function AppShell({
                     >
                       <IconQrCode size={15} /> My QR Codes
                     </button>
-                    <Link
-                      to="/billing"
+                    <button
+                      type="button"
                       className="dropdown-item"
-                      onClick={() => setUserDropdownOpen(false)}
+                      onClick={() => {
+                        setUserDropdownOpen(false);
+                        handleNavClick("billing", "/dashboard?tab=billing");
+                      }}
                     >
                       <IconBilling size={15} /> Plan &amp; Billing
-                    </Link>
+                    </button>
                     {me?.isAdmin && (
                       <Link
                         to="/admin"

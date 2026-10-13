@@ -6,6 +6,9 @@ import { Link, useSearchParams, useNavigate, useLocation } from "react-router-do
 import AppShell from "../components/AppShell";
 import EditQrModal from "../components/EditQrModal";
 import Modal from "../components/Modal";
+import App from "../App";
+import Bulk from "./Bulk";
+import Billing from "./Billing";
 import UsageMeter from "../components/UsageMeter";
 import AuthForm from "../components/AuthForm";
 import QrPreview from "../components/QrPreview";
@@ -382,8 +385,18 @@ export default function Dashboard({ defaultTab }) {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Tab: 'overview' | 'links' | 'analytics' | 'folders' | 'settings' | 'help'
-  const validTabs = ["overview", "links", "analytics", "folders", "settings", "help"];
+  // Tab: 'overview' | 'links' | 'create' | 'bulk' | 'analytics' | 'folders' | 'billing' | 'settings' | 'help'
+  const validTabs = [
+    "overview",
+    "links",
+    "create",
+    "bulk",
+    "analytics",
+    "folders",
+    "billing",
+    "settings",
+    "help",
+  ];
   const pathSegment = location.pathname.replace(/^\//, "").split("/")[0];
   const tabFromPath = validTabs.includes(pathSegment) ? pathSegment : null;
   const currentTab = searchParams.get("tab") || tabFromPath || defaultTab || "links";
@@ -483,8 +496,11 @@ export default function Dashboard({ defaultTab }) {
   const tabTitles = {
     overview: "Platform Overview",
     links: "My QR Codes",
+    create: "Create QR Code",
+    bulk: "Bulk Create QR Codes",
     analytics: "Global Analytics",
     folders: "Campaign Folders",
+    billing: "Plan & Billing",
     settings: "Account & Settings",
     help: "Help & Knowledge Base",
   };
@@ -858,27 +874,77 @@ export default function Dashboard({ defaultTab }) {
         </div>
       )}
 
+      {/* -------------------- SUB-VIEW: CREATE QR CODE -------------------- */}
+      {currentTab === "create" && (
+        <App embedded={true} />
+      )}
+
+      {/* -------------------- SUB-VIEW: BULK CREATE -------------------- */}
+      {currentTab === "bulk" && (
+        <Bulk embedded={true} />
+      )}
+
+      {/* -------------------- SUB-VIEW: PLAN & BILLING -------------------- */}
+      {currentTab === "billing" && (
+        <Billing embedded={true} />
+      )}
+
       {/* -------------------- SUB-VIEW: ANALYTICS -------------------- */}
       {currentTab === "analytics" && (
         <div className="view-analytics-wrap">
-          <div className="analytics-summary-card">
-            <h3>Global Analytics Dashboard</h3>
-            <p>Aggregated scan performance across all active dynamic QR campaigns.</p>
-            <div className="kpi-grid" style={{ marginTop: "16px" }}>
-              <div className="kpi-card">
+          <div className="overview-welcome-card" style={{ marginBottom: "22px" }}>
+            <div className="welcome-text-col">
+              <h2>Global Scan Analytics</h2>
+              <p>Aggregated real-time scan performance, active dynamic campaigns, and visitor metrics.</p>
+            </div>
+            <div className="welcome-action-col">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={() => setTab("create")}
+              >
+                <IconPlus size={16} /> New Campaign
+              </button>
+            </div>
+          </div>
+
+          <div className="analytics-kpi-grid">
+            <div className="kpi-card">
+              <div className="kpi-top">
                 <span className="kpi-title">Total Tracked Scans</span>
-                <span className="kpi-val">{totalScans}</span>
-                <span className="kpi-sub">Across {editableCount} dynamic links</span>
+                <span className="kpi-icon-box bg-blue"><IconChart size={18} /></span>
               </div>
-              <div className="kpi-card">
+              <div className="kpi-body">
+                <div className="kpi-val">{totalScans}</div>
+                <div className="kpi-sub">Across {editableCount} dynamic {editableCount === 1 ? "link" : "links"}</div>
+              </div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-top">
                 <span className="kpi-title">Active Dynamic QRs</span>
-                <span className="kpi-val">{activeCount}</span>
-                <span className="kpi-sub">Receiving traffic</span>
+                <span className="kpi-icon-box bg-emerald"><IconPlay size={16} /></span>
               </div>
-              <div className="kpi-card">
+              <div className="kpi-body">
+                <div className="kpi-val">{activeCount}</div>
+                <div className="kpi-sub">{activeCount > 0 ? "Currently receiving live traffic" : "No active campaigns"}</div>
+              </div>
+            </div>
+
+            <div className="kpi-card">
+              <div className="kpi-top">
                 <span className="kpi-title">Top Performing Campaign</span>
-                <span className="kpi-val" style={{ fontSize: "17px" }}>{topLink?.label || "None"}</span>
-                <span className="kpi-sub">{topLink ? `${topLink.scans || 0} scans` : "No scans yet"}</span>
+                <span className="kpi-icon-box bg-amber"><IconDashboard size={18} /></span>
+              </div>
+              <div className="kpi-body">
+                <div className="kpi-val kpi-val-text" title={topLink ? (topLink.label || `#${topLink.id}`) : "None"}>
+                  {topLink ? (topLink.label || `#${topLink.id}`) : "No scans yet"}
+                </div>
+                <div className="kpi-sub">
+                  {topLink && (topLink.scans || 0) > 0
+                    ? `${topLink.scans} ${topLink.scans === 1 ? "scan" : "scans"} recorded`
+                    : "Create and share dynamic QRs to log scans"}
+                </div>
               </div>
             </div>
           </div>
@@ -887,42 +953,59 @@ export default function Dashboard({ defaultTab }) {
             <div className="card-inner-header">
               <h4>All Campaigns Ranked by Scans</h4>
             </div>
-            <table className="bitly-table">
-              <thead>
-                <tr>
-                  <th>QR Name</th>
-                  <th>Destination</th>
-                  <th>Total Scans</th>
-                  <th>Last Activity</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {links
-                  .filter((l) => l.kind !== "static")
-                  .sort((a, b) => (b.scans || 0) - (a.scans || 0))
-                  .map((link) => (
-                    <tr key={link.id}>
-                      <td>
-                        <b>{link.label || "Untitled"}</b>
-                        <div className="qr-row-sub">#{link.id}</div>
-                      </td>
-                      <td className="truncate" style={{ maxWidth: "260px" }}>{link.destination}</td>
-                      <td><b>{link.scans || 0}</b></td>
-                      <td>{formatDate(link.lastScannedAt)}</td>
-                      <td style={{ textAlign: "right" }}>
-                        <button
-                          type="button"
-                          className="table-action-icon-btn"
-                          onClick={() => setViewing(link)}
-                        >
-                          <IconChart size={13} /> View Deep Analytics
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
+            {links.filter((l) => l.kind !== "static").length === 0 ? (
+              <div className="analytics-empty-state" style={{ padding: "40px 20px", textAlign: "center" }}>
+                <div style={{ fontSize: "36px", marginBottom: "10px" }}>📊</div>
+                <h4>No dynamic campaigns found</h4>
+                <p style={{ color: "var(--bitly-text-muted)", maxWidth: "440px", margin: "6px auto 16px" }}>
+                  Create an editable dynamic QR code to monitor real-time visitor scans, devices, and locations.
+                </p>
+                <button
+                  type="button"
+                  className="primary-btn"
+                  onClick={() => setTab("create")}
+                >
+                  <IconPlus size={16} /> Create Dynamic QR
+                </button>
+              </div>
+            ) : (
+              <table className="bitly-table">
+                <thead>
+                  <tr>
+                    <th>QR Name</th>
+                    <th>Destination</th>
+                    <th>Total Scans</th>
+                    <th>Last Activity</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {links
+                    .filter((l) => l.kind !== "static")
+                    .sort((a, b) => (b.scans || 0) - (a.scans || 0))
+                    .map((link) => (
+                      <tr key={link.id}>
+                        <td>
+                          <b>{link.label || "Untitled"}</b>
+                          <div className="qr-row-sub">#{link.id}</div>
+                        </td>
+                        <td className="truncate" style={{ maxWidth: "260px" }}>{link.destination}</td>
+                        <td><b>{link.scans || 0}</b></td>
+                        <td>{formatDate(link.lastScannedAt)}</td>
+                        <td style={{ textAlign: "right" }}>
+                          <button
+                            type="button"
+                            className="table-action-icon-btn"
+                            onClick={() => setViewing(link)}
+                          >
+                            <IconChart size={13} /> View Deep Analytics
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}

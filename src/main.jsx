@@ -26,6 +26,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<App />} />
+          <Route path="/create" element={<Dashboard defaultTab="create" />} />
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/overview" element={<Dashboard defaultTab="overview" />} />
           <Route path="/links" element={<Dashboard defaultTab="links" />} />
