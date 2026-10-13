@@ -45,12 +45,14 @@ export async function createLink(args) {
   if (kind === "static" && !(payload || "").trim()) throw new Error("Nothing to save.");
   if (kind === "redirect" && !isValidHttpUrl((destination || "").trim())) throw new Error("Destination must be a valid http or https URL.");
   const { id } = await api("/api/links?action=create", { method: "POST", body: { link: toServerLink(args) } });
+  triggerMyLinksRefresh();
   return id;
 }
 
 // Bulk create (Pro+): rows = [{ destination, label, design }, ...] -> ids in the same order. All-or-nothing.
 export async function createLinks(rows) {
   const { ids } = await api("/api/links?action=create-many", { method: "POST", body: { items: rows.map((r) => toServerLink({ ...r, kind: "redirect" })) } });
+  triggerMyLinksRefresh();
   return ids;
 }
 
@@ -84,33 +86,52 @@ export async function updateLink(id, patch = {}) {
   if ("design" in patch) out.design = cleanDesign(patch.design);
   if (!Object.keys(out).length) return;
 
-  return await api("/api/links?action=update", {
+  const res = await api("/api/links?action=update", {
     method: "POST",
     body: { id, patch: out },
   });
+  triggerMyLinksRefresh();
+  return res;
 }
 
 export const updateDestination = (id, destination) => updateLink(id, { destination });
 export const renameLink = (id, label) => updateLink(id, { label });
 
 export async function deleteLink(id) {
-  return await api("/api/links?action=delete", {
+  const res = await api("/api/links?action=delete", {
     method: "POST",
     body: { id },
   });
+  triggerMyLinksRefresh();
+  return res;
+}
+
+const activeRefreshListeners = new Set();
+
+export function triggerMyLinksRefresh() {
+  for (const fn of activeRefreshListeners) {
+    try {
+      fn();
+    } catch {}
+  }
 }
 
 export function subscribeToMyLinks(ownerId, callback, onError) {
   let active = true;
+  let latestApiRows = null;
 
   const loadFromApi = async () => {
     try {
       const links = await fetchMyLinks();
-      if (active) callback(links);
+      if (!active) return;
+      latestApiRows = Array.isArray(links) ? links : [];
+      callback(latestApiRows);
     } catch (err) {
       if (active && onError) onError(err);
     }
   };
+
+  activeRefreshListeners.add(loadFromApi);
 
   // Immediate fetch via API
   loadFromApi();
@@ -131,7 +152,15 @@ export function subscribeToMyLinks(ownerId, callback, onError) {
           setFirestoreAvailable();
           const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
           rows.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
-          callback(rows);
+
+          // Only allow Firestore snapshot to update state if it has records,
+          // or if the backend API has already responded with an empty list.
+          // This prevents an empty Firestore query from overwriting links stored in the persistent backend DB.
+          if (rows.length > 0) {
+            callback(rows);
+          } else if (latestApiRows !== null && latestApiRows.length === 0) {
+            callback([]);
+          }
         },
         () => {
           // Silent fallback to polling if Firestore is not provisioned
@@ -144,6 +173,7 @@ export function subscribeToMyLinks(ownerId, callback, onError) {
 
   return () => {
     active = false;
+    activeRefreshListeners.delete(loadFromApi);
     clearInterval(pollInterval);
     unsubFirestore();
   };

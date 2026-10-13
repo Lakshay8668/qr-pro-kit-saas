@@ -14,7 +14,17 @@ import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const getDataDir = () => path.resolve(process.env.DATA_DIR || path.join(__dirname, "../../data"));
+const getDataDir = () => {
+  if (process.env.DATA_DIR) return path.resolve(process.env.DATA_DIR);
+  // Auto-detect Railway persistent volume mount if /data exists and is writable on Linux
+  try {
+    if (process.platform !== "win32" && fs.existsSync("/data")) {
+      fs.accessSync("/data", fs.constants.W_OK);
+      return "/data";
+    }
+  } catch {}
+  return path.resolve(path.join(__dirname, "../../data"));
+};
 const getDataFile = () => path.join(getDataDir(), "qrpro_db.json");
 
 // In-memory collections map: collectionName -> Map<docId, docData>
@@ -93,6 +103,16 @@ function saveToDisk() {
 function loadFromDisk() {
   try {
     const dataFile = getDataFile();
+    const fallbackFile = path.resolve(path.join(__dirname, "../../data/qrpro_db.json"));
+    if (!fs.existsSync(dataFile) && fs.existsSync(fallbackFile) && dataFile !== fallbackFile) {
+      try {
+        ensureDir(getDataDir());
+        fs.copyFileSync(fallbackFile, dataFile);
+        console.log(`[DB] Seeded persistent data file ${dataFile} from initial data`);
+      } catch (seedErr) {
+        console.warn("[DB] Could not seed data file:", seedErr.message);
+      }
+    }
     if (fs.existsSync(dataFile)) {
       const raw = fs.readFileSync(dataFile, "utf8");
       const dump = JSON.parse(raw);
