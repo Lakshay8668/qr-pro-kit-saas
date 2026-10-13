@@ -25,9 +25,14 @@ export function getSafeCredentialFingerprint(val) {
   return crypto.createHash("sha256").update(clean).digest("hex").slice(0, 8);
 }
 
-/** Resolves Razorpay credentials with smart Test Mode prioritization and alias variable discovery. */
+/** Resolves Razorpay credentials with smart mode handling (RAZORPAY_MODE=test vs live vs auto) and alias variable discovery. */
 export function getRazorpayCredentials(env = process.env) {
   const e = env || {};
+
+  // Mode configuration:
+  // RAZORPAY_MODE can be "test" or "live". Default is "auto".
+  const rawMode = cleanPlanId(e.RAZORPAY_MODE || e.RZP_MODE || e.PAYMENT_MODE || "").toLowerCase();
+  const configuredMode = rawMode === "test" ? "test" : rawMode === "live" ? "live" : "auto";
 
   // 1. Explicit test key candidates
   const testKeyNames = [
@@ -65,10 +70,16 @@ export function getRazorpayCredentials(env = process.env) {
     }
   }
 
+  // If RAZORPAY_KEY_ID begins with rzp_test_, treat it as testKey
+  if (!testKey && stdKey && stdKey.startsWith("rzp_test_")) {
+    testKey = stdKey;
+    testKeyVar = stdKeyVar;
+  }
+
   // 3. Auto-scan env for any variable holding an rzp_test_ key if not yet found
   let discoveredTestKey = "";
   let discoveredTestKeyVar = "";
-  if (!testKey && (!stdKey || !stdKey.startsWith("rzp_test_"))) {
+  if (!testKey) {
     for (const [k, v] of Object.entries(e)) {
       if (/^(RAZORPAY|RZP)/i.test(k) && typeof v === "string") {
         const cleaned = cleanPlanId(v);
@@ -121,6 +132,12 @@ export function getRazorpayCredentials(env = process.env) {
     }
   }
 
+  // If effectiveTestKey matches stdKey and testSecret isn't explicitly set, pair with stdSecret
+  if (!testSecret && effectiveTestKey && effectiveTestKey === stdKey) {
+    testSecret = stdSecret;
+    testSecretVar = stdSecretVar;
+  }
+
   // Auto-scan env for test secret if not found
   if (!testSecret) {
     for (const [k, v] of Object.entries(e)) {
@@ -153,23 +170,93 @@ export function getRazorpayCredentials(env = process.env) {
     }
   }
 
-  // Mode resolution:
-  // If effectiveTestKey is present, PREFER test credentials
+  // 7. Live key candidates (excluding test keys)
+  let liveKey = "";
+  let liveKeyVar = "";
+  if (stdKey && stdKey.startsWith("rzp_live_")) {
+    liveKey = stdKey;
+    liveKeyVar = stdKeyVar;
+  } else {
+    for (const [k, v] of Object.entries(e)) {
+      if (/^(RAZORPAY|RZP)/i.test(k) && typeof v === "string") {
+        const cleaned = cleanPlanId(v);
+        if (cleaned.startsWith("rzp_live_")) {
+          liveKey = cleaned;
+          liveKeyVar = k;
+          break;
+        }
+      }
+    }
+  }
+
+  let liveSecret = "";
+  let liveSecretVar = "";
+  if (liveKey && stdSecret && !testSecretNames.includes(stdSecretVar)) {
+    liveSecret = stdSecret;
+    liveSecretVar = stdSecretVar;
+  }
+
+  // Mode Resolution:
   let activeKey = "";
   let activeKeyVar = "";
   let activeSecret = "";
   let activeSecretVar = "";
+  let selectedMode = "unset";
+  let modeConflict = false;
+  let modeError = "";
 
-  if (effectiveTestKey) {
-    activeKey = effectiveTestKey;
-    activeKeyVar = effectiveTestKeyVar;
-    activeSecret = testSecret || stdSecret;
-    activeSecretVar = testSecret ? testSecretVar : stdSecretVar;
-  } else if (stdKey) {
-    activeKey = stdKey;
-    activeKeyVar = stdKeyVar;
-    activeSecret = stdSecret || testSecret;
-    activeSecretVar = stdSecret ? stdSecretVar : testSecretVar;
+  if (configuredMode === "test") {
+    selectedMode = "test";
+    if (effectiveTestKey) {
+      activeKey = effectiveTestKey;
+      activeKeyVar = effectiveTestKeyVar;
+      activeSecret = testSecret || stdSecret;
+      activeSecretVar = testSecret ? testSecretVar : stdSecretVar;
+    } else {
+      // STRICT TEST MODE: Never fall back to live key!
+      modeConflict = true;
+      if (liveKey) {
+        modeError = `RAZORPAY_MODE is set to 'test', but no Test Key (rzp_test_...) was found. Live key (${maskPlanId(liveKey)}) in ${liveKeyVar} was rejected to prevent accidental live charges. Set RAZORPAY_TEST_KEY_ID (or set RAZORPAY_KEY_ID to an rzp_test_... key) and RAZORPAY_TEST_KEY_SECRET in Railway.`;
+      } else {
+        modeError = `RAZORPAY_MODE is set to 'test', but no Test Key (rzp_test_...) was found in environment. Set RAZORPAY_TEST_KEY_ID and RAZORPAY_TEST_KEY_SECRET in Railway.`;
+      }
+    }
+  } else if (configuredMode === "live") {
+    selectedMode = "live";
+    if (liveKey) {
+      activeKey = liveKey;
+      activeKeyVar = liveKeyVar;
+      activeSecret = liveSecret || stdSecret;
+      activeSecretVar = liveSecret ? liveSecretVar : stdSecretVar;
+    } else {
+      // STRICT LIVE MODE: Never fall back to test key!
+      modeConflict = true;
+      if (effectiveTestKey) {
+        modeError = `RAZORPAY_MODE is set to 'live', but only a Test Key (${maskPlanId(effectiveTestKey)}) was found in ${effectiveTestKeyVar}. Test keys cannot be used in Live Mode.`;
+      } else {
+        modeError = `RAZORPAY_MODE is set to 'live', but no Live Key (rzp_live_...) was found in environment.`;
+      }
+    }
+  } else {
+    // configuredMode === "auto":
+    // Prioritize Test Key if available
+    if (effectiveTestKey) {
+      selectedMode = "test";
+      activeKey = effectiveTestKey;
+      activeKeyVar = effectiveTestKeyVar;
+      activeSecret = testSecret || stdSecret;
+      activeSecretVar = testSecret ? testSecretVar : stdSecretVar;
+    } else if (stdKey) {
+      activeKey = stdKey;
+      activeKeyVar = stdKeyVar;
+      activeSecret = stdSecret || testSecret;
+      activeSecretVar = stdSecret ? stdSecretVar : testSecretVar;
+      selectedMode = activeKey.startsWith("rzp_test_")
+        ? "test"
+        : activeKey.startsWith("rzp_live_")
+        ? "live"
+        : "unknown";
+    }
   }
 
   const keyMode = activeKey.startsWith("rzp_test_")
@@ -180,16 +267,31 @@ export function getRazorpayCredentials(env = process.env) {
     ? "unknown"
     : "unset";
 
+  const keyPrefix = activeKey.startsWith("rzp_test_")
+    ? "rzp_test_"
+    : activeKey.startsWith("rzp_live_")
+    ? "rzp_live_"
+    : activeKey
+    ? activeKey.slice(0, 8)
+    : "none";
+
   return {
     keyId: activeKey,
     keySecret: activeSecret,
     webhookSecret,
     keyMode,
+    keyPrefix,
+    configuredMode,
+    selectedMode,
+    modeConflict,
+    modeError,
     keySourceVar: activeKeyVar,
     secretSourceVar: activeSecretVar,
     webhookSecretSourceVar: webhookSecretVar,
     hasTestCredentials: !!effectiveTestKey,
-    hasLiveCredentials: !!(stdKey && stdKey.startsWith("rzp_live_")),
+    hasLiveCredentials: !!liveKey,
+    liveKeyPreview: maskPlanId(liveKey),
+    liveKeyVar,
   };
 }
 

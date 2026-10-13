@@ -34,7 +34,7 @@ export const providersEnabled = (env) => {
   const creds = getRazorpayCredentials(env);
   return {
     stripe: !!env.STRIPE_SECRET_KEY,
-    razorpay: !!(creds.keyId && creds.keySecret),
+    razorpay: !!(creds.keyId && creds.keySecret && !creds.modeConflict),
   };
 };
 
@@ -104,8 +104,13 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
           },
           razorpay: {
             configured: rzpConfigured,
-            keyIdPreview: maskPlanId(creds.keyId),
+            configuredMode: creds.configuredMode,
+            selectedMode: creds.selectedMode,
             keyMode: creds.keyMode,
+            keyPrefix: creds.keyPrefix,
+            modeConflict: creds.modeConflict,
+            modeError: creds.modeError || null,
+            keyIdPreview: maskPlanId(creds.keyId),
             keySecretConfigured: !!creds.keySecret,
             webhookSecretConfigured: !!creds.webhookSecret,
             activeCredentials: {
@@ -113,6 +118,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
               keyIdSourceVar: creds.keySourceVar,
               keyIdFingerprint: getSafeCredentialFingerprint(creds.keyId),
               keyMode: creds.keyMode,
+              keyPrefix: creds.keyPrefix,
               keySecretSourceVar: creds.secretSourceVar,
               keySecretConfigured: !!creds.keySecret,
               keySecretFingerprint: getSafeCredentialFingerprint(creds.keySecret),
@@ -128,7 +134,7 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
           },
         };
 
-        if (rzpConfigured) {
+        if (rzpConfigured && !creds.modeConflict) {
           const rzp = makeRazorpay(creds);
           try {
             const listRes = await rzp.listPlans(50);
@@ -208,13 +214,30 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
               diag.razorpay.configuredPlans[planKey] = info;
             }
           }
+        } else if (creds.modeConflict) {
+          diag.razorpay.authStatus = "blocked: mode_conflict";
+          for (const plan of ["pro", "business"]) {
+            for (const interval of ["monthly", "yearly"]) {
+              const cfg = getRazorpayPlanEnvConfig(e, plan, interval);
+              diag.razorpay.configuredPlans[`${plan}_${interval}`] = {
+                envVar: cfg.key,
+                configuredId: maskPlanId(cfg.value),
+                isSet: !!cfg.value,
+                valid: false,
+                status: `blocked: ${creds.modeError}`,
+                matchedAccountPlan: null,
+              };
+            }
+          }
         }
 
         // Add high-level recommendations
-        if (creds.keyMode === "live" && !creds.hasTestCredentials) {
+        if (creds.modeConflict) {
+          diag.razorpay.recommendations.unshift(creds.modeError);
+        } else if (creds.keyMode === "live" && !creds.hasTestCredentials) {
           diag.razorpay.recommendations.unshift(
             `Railway is currently running with a LIVE Razorpay Key (${maskPlanId(creds.keyId)}). ` +
-            `If you want to use Test Mode with Test Mode plans, set RAZORPAY_TEST_KEY_ID (or replace RAZORPAY_KEY_ID) with your rzp_test_... key and RAZORPAY_TEST_KEY_SECRET in Railway variables.`
+            `If you want to use Test Mode with Test Mode plans, set RAZORPAY_MODE=test and set RAZORPAY_TEST_KEY_ID (rzp_test_...) and RAZORPAY_TEST_KEY_SECRET in Railway variables.`
           );
         } else if (creds.keyMode === "test") {
           diag.razorpay.recommendations.unshift(
@@ -281,6 +304,18 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
         const provider = String(body.provider || "");
         if (!isPaidPlan(plan) || !isInterval(interval)) return json(res, 400, { error: "bad_request", message: "Pick a paid plan and billing interval." });
         if (!providersEnabled(e)[provider]) {
+          if (provider === "razorpay") {
+            const rzpCreds = getRazorpayCredentials(e);
+            if (rzpCreds.modeConflict) {
+              return json(res, 400, {
+                error: "mode_conflict",
+                message: rzpCreds.modeError || "Razorpay credential mode conflict.",
+                configuredMode: rzpCreds.configuredMode,
+                selectedMode: rzpCreds.selectedMode,
+                keyPrefix: rzpCreds.keyPrefix,
+              });
+            }
+          }
           const provName = provider === "razorpay" ? "Razorpay" : "Stripe";
           return json(res, 400, {
             error: "provider_unavailable",
@@ -315,53 +350,26 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
 
         // Razorpay checkout
         const creds = getRazorpayCredentials(e);
+        if (creds.modeConflict) {
+          return json(res, 400, {
+            error: "mode_conflict",
+            message: creds.modeError || "Razorpay credential mode conflict.",
+            configuredMode: creds.configuredMode,
+            selectedMode: creds.selectedMode,
+            keyPrefix: creds.keyPrefix,
+          });
+        }
+
+        if (!creds.keyId || !creds.keySecret) {
+          return json(res, 400, {
+            error: "provider_not_configured",
+            message: `Razorpay credentials are missing for ${creds.selectedMode || "selected"} mode. Configure RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET (or RAZORPAY_TEST_KEY_ID and RAZORPAY_TEST_KEY_SECRET).`,
+          });
+        }
+
         const cfg = getRazorpayPlanEnvConfig(e, plan, interval);
-        let providerPlanId = cfg.value;
+        const providerPlanId = cfg.value;
         const rzp = makeRazorpay(creds);
-
-        // 1. If not configured in env, attempt auto-discovery from user's live Razorpay account
-        if (!providerPlanId) {
-          try {
-            const listRes = await rzp.listPlans(50).catch(() => null);
-            const targetAmount = PLANS[plan].price[interval];
-            const matchingPlan = (listRes?.items || []).find(
-              (p) => p.period === interval && (p.item?.amount === targetAmount * 100 || (p.item?.name || "").toLowerCase().includes(plan))
-            );
-            if (matchingPlan) {
-              console.log(`[Billing] Auto-discovered plan for ${plan} (${interval}) from account: ${matchingPlan.id}`);
-              providerPlanId = cleanPlanId(matchingPlan.id);
-            }
-          } catch (discErr) {
-            console.warn("[Billing] Plan discovery note:", discErr.message);
-          }
-        }
-
-        // 2. If still not configured, check DB plan cache or attempt auto-creation
-        if (!providerPlanId) {
-          try {
-            const planCacheRef = db.collection("config").doc("razorpay_plans");
-            const planCacheDoc = await planCacheRef.get();
-            const planCache = planCacheDoc.exists ? planCacheDoc.data() : {};
-            const cacheKey = `${plan}_${interval}`;
-            if (planCache[cacheKey]) {
-              providerPlanId = cleanPlanId(planCache[cacheKey]);
-            } else {
-              const amountPaise = (PLANS[plan].price[interval] || 0) * 100;
-              const createdPlan = await rzp.createPlan({
-                period: interval === "yearly" ? "yearly" : "monthly",
-                interval: 1,
-                name: `QR Pro Kit ${PLANS[plan].name} (${interval})`,
-                amount: amountPaise,
-                currency: "INR",
-                description: `${PLANS[plan].name} Plan Subscription`,
-              });
-              providerPlanId = cleanPlanId(createdPlan.id);
-              await planCacheRef.set({ [cacheKey]: providerPlanId }, { merge: true });
-            }
-          } catch (planErr) {
-            console.warn("[Billing] Auto-provisioning Razorpay plan note:", planErr.message);
-          }
-        }
 
         if (!providerPlanId) {
           return json(res, 503, {
@@ -370,66 +378,45 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
           });
         }
 
-        // 3. Attempt subscription creation, with auto-recovery if configured planId is invalid
+        // Strictly attempt subscription creation with the configured plan ID.
+        // DO NOT silently select alternative plans by price, and DO NOT auto-create plans.
         let s = null;
         try {
           s = await rzp.createSubscription({ planId: providerPlanId, uid: me.uid, plan, interval });
         } catch (subErr) {
-          console.warn(`[Billing] Initial subscription creation failed for planId "${maskPlanId(providerPlanId)}":`, subErr.message);
+          console.warn(`[Billing] Subscription creation failed for planId "${maskPlanId(providerPlanId)}":`, subErr.message);
 
-          // If Razorpay returns "The ID provided is invalid or could not be found", inspect the account to recover or give actionable diagnostic!
-          if (
-            subErr.message?.includes("invalid or could not be found") ||
-            subErr.message?.includes("does not exist") ||
-            subErr.status === 400
-          ) {
-            let accountPlansList = null;
-            try {
-              accountPlansList = await rzp.listPlans(50);
-            } catch (listErr) {
-              console.warn("[Billing] Could not fetch account plans list:", listErr.message);
-            }
-
-            const items = accountPlansList?.items || [];
-            const targetAmount = PLANS[plan].price[interval];
-            const candidate = items.find(
-              (p) => p.period === interval && (p.item?.amount === targetAmount * 100 || (p.item?.name || "").toLowerCase().includes(plan))
-            );
-
-            if (candidate && candidate.id !== providerPlanId) {
-              console.log(`[Billing] Auto-recovering: Found matching plan in Razorpay account: ${candidate.id}. Retrying subscription.`);
-              try {
-                s = await rzp.createSubscription({ planId: candidate.id, uid: me.uid, plan, interval });
-                providerPlanId = candidate.id;
-              } catch (retryErr) {
-                console.error("[Billing] Retry subscription creation failed:", retryErr.message);
-              }
-            }
-
-            if (!s) {
-              const summary = items.length
-                ? items.map((p) => `${p.id} (${p.item?.name || p.period} - ₹${(p.item?.amount || 0) / 100})`).join(", ")
-                : "No plans found in this Razorpay account";
-
-              const errMsg = `The configured Razorpay plan ID for ${PLANS[plan].name} (${interval}) is invalid. ` +
-                `Railway variable ${cfg.key} has "${maskPlanId(providerPlanId)}", which was not found in your Razorpay account (${maskPlanId(creds.keyId)} [${creds.keyMode}]). ` +
-                `Available plans in your account: [${summary}]. ` +
-                `Please update ${cfg.key} in Railway to match your Razorpay plan ID.`;
-
-              console.error("[Billing]", errMsg);
-              return json(res, 400, {
-                error: "invalid_plan_id",
-                message: errMsg,
-                configuredVar: cfg.key,
-                configuredId: maskPlanId(providerPlanId),
-                keyMode: creds.keyMode,
-                keyIdPreview: maskPlanId(creds.keyId),
-                availablePlans: items.map((p) => ({ id: p.id, name: p.item?.name, amount: (p.item?.amount || 0) / 100, period: p.period })),
-              });
-            }
-          } else {
-            throw subErr;
+          // Fetch account plans list strictly for diagnostic error reporting
+          let accountPlansList = null;
+          try {
+            accountPlansList = await rzp.listPlans(50);
+          } catch (listErr) {
+            console.warn("[Billing] Could not fetch account plans list:", listErr.message);
           }
+
+          const items = accountPlansList?.items || [];
+          const summary = items.length
+            ? items.map((p) => `${p.id} (${p.item?.name || p.period} - ₹${(p.item?.amount || 0) / 100})`).join(", ")
+            : "No plans found in this Razorpay account";
+
+          const errMsg = `The configured Razorpay plan ID for ${PLANS[plan].name} (${interval}) is invalid. ` +
+            `Railway variable ${cfg.key} has "${maskPlanId(providerPlanId)}", which was not found in your Razorpay account (${maskPlanId(creds.keyId)} [${creds.keyMode}]). ` +
+            `Available plans in your account: [${summary}]. ` +
+            `Please update ${cfg.key} in Railway to match your Razorpay plan ID.`;
+
+          console.error("[Billing]", errMsg);
+          return json(res, 400, {
+            error: "invalid_plan_id",
+            message: errMsg,
+            configuredVar: cfg.key,
+            configuredId: maskPlanId(providerPlanId),
+            keyMode: creds.keyMode,
+            keyPrefix: creds.keyPrefix,
+            configuredMode: creds.configuredMode,
+            selectedMode: creds.selectedMode,
+            keyIdPreview: maskPlanId(creds.keyId),
+            availablePlans: items.map((p) => ({ id: p.id, name: p.item?.name, amount: (p.item?.amount || 0) / 100, period: p.period })),
+          });
         }
 
         const checkoutUrl = s.short_url || `https://rzp.io/i/${s.id}`;

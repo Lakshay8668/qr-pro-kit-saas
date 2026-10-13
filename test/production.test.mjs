@@ -418,11 +418,10 @@ console.log("Running production repair & verification tests...");
   ok("link ownership accurately references persistent customer UID");
 }
 
-// ------------------------------------------------------------------ 5. Razorpay Auto-Provisioning, Verification & Upgrades
+// ------------------------------------------------------------------ 5. Razorpay Subscription Checkout, Verification & Upgrades
 {
   const db = createUniversalDb();
   const testSecret = "rzp_secret_production_test_999";
-  let provisionedPlan = null;
   let createdSubscription = null;
 
   const billingHandler = createBillingHandler({
@@ -434,16 +433,12 @@ console.log("Running production repair & verification tests...");
     env: () => ({
       RAZORPAY_KEY_ID: "rzp_test_danKey",
       RAZORPAY_KEY_SECRET: testSecret,
-      // RAZORPAY_PLAN_PRO_MONTHLY intentionally omitted to test auto-provisioning!
+      RAZORPAY_PLAN_PRO_MONTHLY: "plan_dan_pro_monthly_999",
     }),
     makeStripe: () => ({}),
     makeRazorpay: () => ({
       listPlans: async () => ({ items: [] }),
       getPlan: async () => ({}),
-      createPlan: async (planArgs) => {
-        provisionedPlan = planArgs;
-        return { id: "plan_auto_pro_monthly_999" };
-      },
       createSubscription: async (subArgs) => {
         createdSubscription = subArgs;
         return { id: "sub_dan_pro_999", short_url: "https://rzp.io/i/danProSub" };
@@ -459,7 +454,7 @@ console.log("Running production repair & verification tests...");
     now: () => Date.now(),
   });
 
-  // A. Checkout auto-provisions Razorpay plan if not in env
+  // A. Checkout uses configured Razorpay plan ID
   let res = await callJson(billingHandler, {
     method: "POST",
     headers: { Authorization: "Bearer token_dan" },
@@ -470,9 +465,8 @@ console.log("Running production repair & verification tests...");
   assert.equal(res.body.url, "https://rzp.io/i/danProSub");
   assert.equal(res.body.subscriptionId, "sub_dan_pro_999");
   assert.equal(res.body.keyId, "rzp_test_danKey");
-  assert.equal(provisionedPlan.amount, 29900); // 299 INR in paise
-  assert.equal(createdSubscription.planId, "plan_auto_pro_monthly_999");
-  ok("Razorpay checkout auto-provisions plan and returns checkout credentials when env plan unset");
+  assert.equal(createdSubscription.planId, "plan_dan_pro_monthly_999");
+  ok("Razorpay checkout creates subscription with configured plan ID and returns checkout credentials");
 
   // B. Verify payment signature: tampered signature rejected
   res = await callJson(billingHandler, {
@@ -538,7 +532,7 @@ console.log("Running production repair & verification tests...");
   ok("GET ?action=me immediately reflects active upgraded subscription");
 }
 
-// ------------------------------------------------------------------ 6. Safe Billing Diagnostics & Invalid ID Auto-Recovery
+// ------------------------------------------------------------------ 6. Safe Billing Diagnostics, Strict Plan Validation & Explicit Mode Control
 {
   const db = createUniversalDb();
   const testSecret = "rzp_secret_production_test_888";
@@ -558,16 +552,20 @@ console.log("Running production repair & verification tests...");
     },
   ];
 
+  let currentEnv = {
+    RAZORPAY_KEY_ID: "rzp_test_myValidKey123",
+    RAZORPAY_KEY_SECRET: testSecret,
+    RAZORPAY_PLAN_PRO_MONTHLY: " plan_invalid_id_from_other_account ", // Contains spaces & invalid ID
+  };
+
   const handler = createBillingHandler({
     getDb: () => db,
     verify: async () => ({ uid: "user_test_diag", email: "diag@example.com" }),
-    env: () => ({
-      RAZORPAY_KEY_ID: "rzp_test_myValidKey123",
-      RAZORPAY_KEY_SECRET: testSecret,
-      RAZORPAY_PLAN_PRO_MONTHLY: " plan_invalid_id_from_other_account ", // Contains spaces & invalid ID
-    }),
+    env: () => currentEnv,
     makeStripe: () => ({}),
-    makeRazorpay: () => ({
+    makeRazorpay: (creds) => ({
+      keyId: creds?.keyId,
+      keySecret: creds?.keySecret,
       listPlans: async () => ({ items: liveAccountPlans }),
       getPlan: async (id) => {
         const found = liveAccountPlans.find((p) => p.id === id);
@@ -587,21 +585,38 @@ console.log("Running production repair & verification tests...");
     now: () => Date.now(),
   });
 
-  // A. Diagnostics reports key mode, invalid configured plan, and available account plans
+  // A. Diagnostics reports key mode, prefix type, invalid configured plan, and available account plans
   let res = await callJson(handler, {
     method: "GET",
     query: { action: "diagnose" },
   });
   assert.equal(res.code, 200);
   assert.equal(res.body.razorpay.keyMode, "test");
+  assert.equal(res.body.razorpay.keyPrefix, "rzp_test_");
   assert.equal(res.body.razorpay.authStatus, "authenticated");
   assert.equal(res.body.razorpay.accountPlans.length, 2);
   assert.equal(res.body.razorpay.configuredPlans.pro_monthly.isSet, true);
   assert.equal(res.body.razorpay.configuredPlans.pro_monthly.valid, false);
   assert.ok(res.body.razorpay.recommendations.length > 0);
-  ok("GET ?action=diagnose accurately identifies invalid plan and recommends real account plan");
+  ok("GET ?action=diagnose accurately identifies invalid plan and reports prefix/mode");
 
-  // B. Checkout with invalid plan ID auto-recovers using matching plan from live account
+  // B. Checkout with invalid plan ID rejects with HTTP 400 and does NOT silently select plans by price
+  res = await callJson(handler, {
+    method: "POST",
+    headers: { Authorization: "Bearer test_token" },
+    query: { action: "checkout" },
+    body: { plan: "pro", interval: "monthly", provider: "razorpay" },
+  });
+  assert.equal(res.code, 400);
+  assert.equal(res.body.error, "invalid_plan_id");
+  assert.equal(res.body.configuredVar, "RAZORPAY_PLAN_PRO_MONTHLY");
+  assert.equal(res.body.keyMode, "test");
+  assert.equal(res.body.keyPrefix, "rzp_test_");
+  assert.ok(res.body.message.includes("is invalid"));
+  ok("checkout rejects invalid plan ID without silent price substitution");
+
+  // C. Checkout with verified matching plan ID succeeds without substitution
+  currentEnv.RAZORPAY_PLAN_PRO_MONTHLY = "plan_test_pro_m_real";
   res = await callJson(handler, {
     method: "POST",
     headers: { Authorization: "Bearer test_token" },
@@ -611,9 +626,9 @@ console.log("Running production repair & verification tests...");
   assert.equal(res.code, 200);
   assert.equal(res.body.url, "https://rzp.io/i/plan_test_pro_m_real");
   assert.equal(res.body.subscriptionId, "sub_real_plan_test_pro_m_real");
-  ok("checkout automatically recovers from invalid configured plan ID using account discovery");
+  ok("checkout creates subscription strictly with configured verified plan ID");
 
-  // C. Test Mode credential prioritization and safe fingerprinting
+  // D. Explicit RAZORPAY_MODE=test configuration and credential isolation
   const { getRazorpayCredentials, getSafeCredentialFingerprint } = await import("../api/_lib/providers.js");
   
   // SHA-256 fingerprint should never expose secret
@@ -621,16 +636,66 @@ console.log("Running production repair & verification tests...");
   assert.equal(fp.length, 8);
   assert.ok(!fp.includes("secret"));
 
-  // Only live key configured
+  // D1. RAZORPAY_MODE=test strictly rejects Live key and NEVER falls back
+  const testModeWithLiveKey = getRazorpayCredentials({
+    RAZORPAY_MODE: "test",
+    RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
+    RAZORPAY_KEY_SECRET: "live_secret_value_12345",
+  });
+  assert.equal(testModeWithLiveKey.configuredMode, "test");
+  assert.equal(testModeWithLiveKey.selectedMode, "test");
+  assert.equal(testModeWithLiveKey.modeConflict, true);
+  assert.equal(testModeWithLiveKey.keyId, ""); // strictly rejected!
+  assert.ok(testModeWithLiveKey.modeError.includes("rejected"));
+  ok("RAZORPAY_MODE=test strictly rejects Live key and prevents live fallback");
+
+  // D2. Checkout under mode conflict returns HTTP 400 mode_conflict
+  currentEnv = {
+    RAZORPAY_MODE: "test",
+    RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
+    RAZORPAY_KEY_SECRET: "live_secret_value_12345",
+    RAZORPAY_PLAN_PRO_MONTHLY: "plan_test_pro_m_real",
+  };
+  res = await callJson(handler, {
+    method: "POST",
+    headers: { Authorization: "Bearer test_token" },
+    query: { action: "checkout" },
+    body: { plan: "pro", interval: "monthly", provider: "razorpay" },
+  });
+  assert.equal(res.code, 400);
+  assert.equal(res.body.error, "mode_conflict");
+  assert.ok(res.body.message.includes("rejected"));
+  ok("checkout refuses execution when RAZORPAY_MODE=test lacks Test Key credentials");
+
+  // D3. RAZORPAY_MODE=test with test key succeeds
+  const testModeWithTestKey = getRazorpayCredentials({
+    RAZORPAY_MODE: "test",
+    RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
+    RAZORPAY_KEY_SECRET: "live_secret_value_12345",
+    RAZORPAY_TEST_KEY_ID: "rzp_test_testkey987654",
+    RAZORPAY_TEST_KEY_SECRET: "test_secret_value_98765",
+  });
+  assert.equal(testModeWithTestKey.configuredMode, "test");
+  assert.equal(testModeWithTestKey.selectedMode, "test");
+  assert.equal(testModeWithTestKey.keyMode, "test");
+  assert.equal(testModeWithTestKey.keyPrefix, "rzp_test_");
+  assert.equal(testModeWithTestKey.keyId, "rzp_test_testkey987654");
+  assert.equal(testModeWithTestKey.keySecret, "test_secret_value_98765");
+  assert.equal(testModeWithTestKey.modeConflict, false);
+  ok("RAZORPAY_MODE=test correctly selects Test credentials and ignores Live credentials");
+
+  // D4. Auto mode with live key only
   const liveOnly = getRazorpayCredentials({
     RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
     RAZORPAY_KEY_SECRET: "live_secret_value_12345",
   });
+  assert.equal(liveOnly.configuredMode, "auto");
   assert.equal(liveOnly.keyMode, "live");
+  assert.equal(liveOnly.keyPrefix, "rzp_live_");
   assert.equal(liveOnly.keyId, "rzp_live_1234567890abcdef");
   assert.equal(liveOnly.keySourceVar, "RAZORPAY_KEY_ID");
 
-  // Both live and test keys configured: MUST prioritize test key!
+  // D5. Auto mode with both: prioritizes test key
   const liveAndTest = getRazorpayCredentials({
     RAZORPAY_KEY_ID: "rzp_live_1234567890abcdef",
     RAZORPAY_KEY_SECRET: "live_secret_value_12345",
@@ -638,6 +703,7 @@ console.log("Running production repair & verification tests...");
     RAZORPAY_TEST_KEY_SECRET: "test_secret_value_98765",
   });
   assert.equal(liveAndTest.keyMode, "test");
+  assert.equal(liveAndTest.keyPrefix, "rzp_test_");
   assert.equal(liveAndTest.keyId, "rzp_test_testkey987654");
   assert.equal(liveAndTest.keySecret, "test_secret_value_98765");
   assert.equal(liveAndTest.keySourceVar, "RAZORPAY_TEST_KEY_ID");

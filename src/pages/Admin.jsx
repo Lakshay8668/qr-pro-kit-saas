@@ -749,12 +749,19 @@ export default function Admin() {
               <div className="diag-card">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                   <h4 style={{ margin: 0 }}>Razorpay Gateway</h4>
-                  <span className={diag.razorpay?.keyMode === "test" ? "badge-test" : "badge-live"}>
-                    {diag.razorpay?.keyMode === "test" ? "TEST MODE" : "LIVE MODE"}
+                  <span className={diag.razorpay?.selectedMode === "test" || diag.razorpay?.keyMode === "test" ? "badge-test" : "badge-live"}>
+                    {(diag.razorpay?.selectedMode || diag.razorpay?.keyMode || "LIVE").toUpperCase()} MODE
                   </span>
                 </div>
                 <div style={{ display: "grid", gap: 10, fontSize: 13 }}>
-                  <div><b>Status:</b> {diag.razorpay?.configured ? "✓ Configured & Active" : "⚠ Incomplete"}</div>
+                  <div><b>Status:</b> {diag.razorpay?.configured ? "✓ Configured & Active" : diag.razorpay?.modeConflict ? "⚠ Mode Conflict" : "⚠ Incomplete"}</div>
+                  {diag.razorpay?.modeConflict && (
+                    <div style={{ color: "#ef4444", fontSize: 12, background: "#fef2f2", padding: "6px 8px", borderRadius: 4, border: "1px solid #fecaca" }}>
+                      <b>Warning:</b> {diag.razorpay.modeError}
+                    </div>
+                  )}
+                  <div><b>Configured Mode:</b> <code>{diag.razorpay?.configuredMode || "auto"}</code></div>
+                  <div><b>Key Prefix Type:</b> <code>{diag.razorpay?.keyPrefix || "none"}</code></div>
                   <div><b>Key ID Preview:</b> <code>{diag.razorpay?.keyIdPreview || "None"}</code></div>
                   <div><b>Active Variable:</b> <code>{diag.razorpay?.keyIdSourceVar || "None"}</code></div>
                   <div>
