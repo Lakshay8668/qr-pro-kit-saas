@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import Topbar from "../components/Topbar";
 import AuthForm from "../components/AuthForm";
+import AppShell from "../components/AppShell";
 import UsageMeter from "../components/UsageMeter";
 import { useAuth } from "../lib/useAuth";
 import { useBilling } from "../lib/useBilling";
@@ -56,13 +57,17 @@ export default function Billing() {
   };
 
   return (
-    <main className="app-shell">
-      <Topbar />
-      <div className="dash-page">
-        <div className="dash-header">
-          <div>
-            <h2>Billing &amp; usage</h2>
-            <p className="dash-sub"><Link to="/dashboard">← My QR codes</Link><span className="dash-sep"> · </span><Link to="/pricing">Compare plans</Link></p>
+    <AppShell currentTab="billing" title="Plan & Billing">
+      <div className="view-billing-wrap">
+        <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
+          <div className="welcome-text-col">
+            <h2>Plan &amp; Usage Management</h2>
+            <p>View your active subscription details, monitor monthly scan quotas, and manage billing portals.</p>
+          </div>
+          <div className="welcome-action-col">
+            <Link to="/pricing" className="primary-btn">
+              Compare All Plans →
+            </Link>
           </div>
         </div>
 
@@ -112,6 +117,6 @@ export default function Billing() {
           </>
         )}
       </div>
-    </main>
+    </AppShell>
   );
 }

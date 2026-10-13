@@ -6,6 +6,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import Topbar from "../components/Topbar";
 import AuthForm from "../components/AuthForm";
+import AppShell from "../components/AppShell";
 import { useAuth } from "../lib/useAuth";
 import { createLinks, dynamicUrlFor } from "../lib/links";
 import { useBilling } from "../lib/useBilling";
@@ -130,10 +131,8 @@ export default function Bulk() {
     }
   };
 
-  return (
-    <main className="app-shell">
-      <Topbar />
-      <section className="workspace single">
+  const contentJsx = (
+    <section className="workspace single" style={{ margin: user ? "16px auto 50px" : "20px auto 70px" }}>
         <div className="card form-card">
           <div className="card-title">
             <div>
@@ -240,6 +239,33 @@ export default function Bulk() {
           </p>
         </div>
       </section>
+  );
+
+  if (user) {
+    return (
+      <AppShell currentTab="bulk" title="Bulk Create QR Codes">
+        <div className="view-bulk-wrap">
+          <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
+            <div className="welcome-text-col">
+              <h2>Bulk QR Code Generator</h2>
+              <p>One line per QR: <code>label,url</code> — e.g. restaurant tables, products, branches. Generates a ZIP of branded PNGs + mapping CSV.</p>
+            </div>
+            <div className="welcome-action-col">
+              <Link to="/dashboard" className="secondary-btn">
+                ← Back to My QR Codes
+              </Link>
+            </div>
+          </div>
+          {contentJsx}
+        </div>
+      </AppShell>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <Topbar />
+      {contentJsx}
     </main>
   );
 }

@@ -10,6 +10,7 @@ import { createLink, dynamicUrlFor, updateLink } from "./lib/links";
 import { useAuth } from "./lib/useAuth";
 import { useBilling } from "./lib/useBilling";
 import { Link } from "react-router-dom";
+import AppShell from "./components/AppShell";
 import {
   DEFAULT_DESIGN,
   SHAPES,
@@ -234,22 +235,8 @@ export default function App() {
   const canDynamic = SUPPORTS_DYNAMIC(type);
   const typeLabel = QR_TYPES.find((t) => t.id === type)?.label;
 
-  return (
-    <main className="app-shell">
-      <Topbar />
-
-      <section className="hero">
-        <div>
-          <p className="eyebrow">QR CODE GENERATOR</p>
-          <h1>Create QR codes that actually work for your business.</h1>
-          <p className="sub">
-            17 QR types incl. UPI, PDF menus &amp; link-in-bio pages, password &amp; expiry controls, city-level scan analytics,
-            custom shapes, logo &amp; frames — free.
-          </p>
-        </div>
-      </section>
-
-      <section className="workspace">
+  const workspaceJsx = (
+    <section className="workspace" style={user ? { margin: "16px auto 50px" } : {}}>
         <div className="card form-card">
           <div className="card-title">
             <div>
@@ -552,6 +539,45 @@ export default function App() {
           </p>
         </div>
       </section>
+  );
+
+  if (user) {
+    return (
+      <AppShell currentTab="create" title="Create QR Code">
+        <div className="generator-shell-wrap">
+          <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
+            <div className="welcome-text-col">
+              <h2>Create Branded QR Code</h2>
+              <p>Choose a content type, customize shapes and colors, and save to your dashboard.</p>
+            </div>
+            <div className="welcome-action-col">
+              <Link to="/dashboard" className="secondary-btn">
+                ← View My QR Codes
+              </Link>
+            </div>
+          </div>
+          {workspaceJsx}
+        </div>
+      </AppShell>
+    );
+  }
+
+  return (
+    <main className="app-shell">
+      <Topbar />
+
+      <section className="hero">
+        <div>
+          <p className="eyebrow">QR CODE GENERATOR</p>
+          <h1>Create QR codes that actually work for your business.</h1>
+          <p className="sub">
+            17 QR types incl. UPI, PDF menus &amp; link-in-bio pages, password &amp; expiry controls, city-level scan analytics,
+            custom shapes, logo &amp; frames — free.
+          </p>
+        </div>
+      </section>
+
+      {workspaceJsx}
     </main>
   );
 }
