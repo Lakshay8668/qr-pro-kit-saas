@@ -170,6 +170,33 @@ port = server.address().port;
   ok("POST /api/users?action=sync creates and returns authenticated user");
 }
 
+// 10. Admin entitlements via billing endpoint
+{
+  const prevAdminUids = process.env.ADMIN_UIDS;
+  delete process.env.ADMIN_UIDS;
+  const rRegular = await request("/api/billing?action=me", {
+    headers: { Authorization: "Bearer test_server_user_99" },
+  });
+  assert.equal(rRegular.status, 200);
+  assert.equal(rRegular.body.plan, "free");
+  assert.equal(rRegular.body.isAdmin, false);
+
+  process.env.ADMIN_UIDS = "server_user_99";
+  const rAdmin = await request("/api/billing?action=me", {
+    headers: { Authorization: "Bearer test_server_user_99" },
+  });
+  assert.equal(rAdmin.status, 200);
+  assert.equal(rAdmin.body.plan, "admin");
+  assert.equal(rAdmin.body.isAdmin, true);
+  assert.equal(rAdmin.body.limits.dynamicQrs, 999999999);
+  if (prevAdminUids !== undefined) {
+    process.env.ADMIN_UIDS = prevAdminUids;
+  } else {
+    delete process.env.ADMIN_UIDS;
+  }
+  ok("GET /api/billing?action=me accurately reflects admin status and limits based on server allowlist");
+}
+
 // Close server
 server.close();
 console.log("All server tests passed!\n");

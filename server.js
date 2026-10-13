@@ -8,6 +8,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DIST_DIR = path.join(__dirname, "dist");
 
+// Safely load local .env if present (e.g. in local development without overriding orchestrator environment variables)
+const envFilePath = path.join(__dirname, ".env");
+if (fs.existsSync(envFilePath) && typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile(envFilePath);
+  } catch {
+    // Non-fatal if .env is missing or unparseable
+  }
+}
+
 // Lazy-load API route handlers
 let billingHandler;
 let linksHandler;

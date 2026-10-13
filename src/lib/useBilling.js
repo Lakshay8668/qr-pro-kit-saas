@@ -1,8 +1,8 @@
 // src/lib/useBilling.js — the signed-in customer's plan, limits and live usage (GET /api/billing?action=me).
 // One shared store, so Topbar / Dashboard / Billing don't each fire their own request.
 import { useEffect, useSyncExternalStore } from "react";
-import { api } from "./api";
-import { PLANS, entitlementsFor } from "../../shared/plans";
+import { api } from "./api.js";
+import { PLANS, entitlementsFor } from "../../shared/plans.js";
 
 export function getDefaultBilling(user) {
   const ent = entitlementsFor(user || {});
@@ -10,6 +10,7 @@ export function getDefaultBilling(user) {
     plan: ent.plan || "free",
     rawPlan: "free",
     status: "active",
+    isAdmin: Boolean(ent.isAdmin || ent.plan === "admin"),
     interval: null,
     currentPeriodEnd: 0,
     cancelAtPeriodEnd: false,
@@ -44,6 +45,7 @@ export async function refreshBilling() {
           plan: planKey,
           rawPlan: rawMe.rawPlan || planKey,
           status: rawMe.status || "active",
+          isAdmin: Boolean(rawMe.isAdmin || planKey === "admin"),
           interval: rawMe.interval || null,
           currentPeriodEnd: Number(rawMe.currentPeriodEnd) || 0,
           cancelAtPeriodEnd: !!rawMe.cancelAtPeriodEnd,
