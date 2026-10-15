@@ -512,15 +512,20 @@ export default function App({ embedded = false }) {
                   <p className="payload" style={{ margin: 0, wordBreak: "break-all" }}>{payload}</p>
                 </div>
                 <div style={{ whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "6px" }}>
-                  {createdId && (isDynamic || forced) && (
+                  {(payload.startsWith("http://") || payload.startsWith("https://")) && (
                     <a className="dash-btn" href={payload} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
                       Open
                     </a>
                   )}
                   <button type="button" className="dash-btn" onClick={copyLink}>
-                    {copied ? "Copied!" : "Copy"}
+                    {copied ? "Copied!" : "Copy Link"}
                   </button>
                 </div>
+              </div>
+              <div style={{ marginTop: "8px", fontSize: "11px", color: "var(--text-muted, #64748b)", lineHeight: 1.4 }}>
+                {isDynamic || forced
+                  ? "⚡ Dynamic QR codes route through a short link and can be updated anytime without changing the printed QR code."
+                  : "ℹ️ Static QR codes encode the destination directly into the pattern and cannot be edited without generating a replacement QR code."}
               </div>
               {createdId && (
                 <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--success, #16a34a)" }}>

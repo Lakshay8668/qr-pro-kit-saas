@@ -265,9 +265,15 @@ function LinkRow({ link, onEdit, onAnalytics }) {
       <td>
         {isStatic ? (
           <div>
-            <span className="dest-link" title={link.payload}>
-              {String(link.payload || "").slice(0, 65)}
-            </span>
+            {(link.payload?.startsWith("http://") || link.payload?.startsWith("https://")) ? (
+              <a href={link.payload} target="_blank" rel="noreferrer" className="dash-link dest-link" style={{ fontWeight: 600 }}>
+                {String(link.payload || "").slice(0, 65)}
+              </a>
+            ) : (
+              <span className="dest-link" title={link.payload}>
+                {String(link.payload || "").slice(0, 65)}
+              </span>
+            )}
             <div className="qr-row-sub">Direct Static Content</div>
           </div>
         ) : link.kind === "bio" ? (
@@ -336,6 +342,20 @@ function LinkRow({ link, onEdit, onAnalytics }) {
           {copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
           <span>{copied ? "Copied!" : "Copy"}</span>
         </button>
+
+        {(isStatic ? (link.payload?.startsWith("http://") || link.payload?.startsWith("https://")) : Boolean(url)) && (
+          <a
+            href={isStatic ? link.payload : url}
+            target="_blank"
+            rel="noreferrer"
+            className="table-action-icon-btn"
+            title="Open link in new tab"
+            style={{ textDecoration: "none", color: "inherit", display: "inline-flex", alignItems: "center", gap: "4px" }}
+          >
+            <IconExternalLink size={14} />
+            <span>Open</span>
+          </a>
+        )}
 
         {!isStatic && (
           <button
@@ -411,6 +431,8 @@ export default function Dashboard({ defaultTab }) {
   const [statusFilter, setStatusFilter] = useState("all"); // 'all' | 'active' | 'paused' | 'expired' | 'limit'
   const [sortBy, setSortBy] = useState("newest"); // 'newest' | 'oldest' | 'scans' | 'label'
   const [viewMode, setViewMode] = useState("table"); // 'table' | 'cards'
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   // Modals
   const [editing, setEditing] = useState(null);
@@ -436,6 +458,11 @@ export default function Dashboard({ defaultTab }) {
     );
     return unsub;
   }, [user]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, typeFilter, statusFilter, sortBy]);
 
   // Derived metrics
   const totalScans = links.reduce((sum, l) => sum + (l.scans || 0), 0);
@@ -480,6 +507,13 @@ export default function Dashboard({ defaultTab }) {
 
     return result;
   }, [links, searchQuery, typeFilter, statusFilter, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(visibleLinks.length / pageSize));
+  const pageIndex = Math.min(currentPage, totalPages);
+  const paginatedLinks = useMemo(() => {
+    const start = (pageIndex - 1) * pageSize;
+    return visibleLinks.slice(start, start + pageSize);
+  }, [visibleLinks, pageIndex, pageSize]);
 
   if (loading) {
     return (
@@ -606,7 +640,7 @@ export default function Dashboard({ defaultTab }) {
                 <UsageMeter
                   label="Dynamic Editable QRs"
                   used={editableCount}
-                  limit={me?.limits?.dynamicQrs ?? 3}
+                  limit={me?.limits?.dynamicQrs ?? 1}
                 />
                 <UsageMeter
                   label="Monthly Scans"
@@ -808,7 +842,7 @@ export default function Dashboard({ defaultTab }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleLinks.map((link) => (
+                  {paginatedLinks.map((link) => (
                     <LinkRow key={link.id} link={link} onEdit={setEditing} onAnalytics={setViewing} />
                   ))}
                 </tbody>
@@ -817,7 +851,7 @@ export default function Dashboard({ defaultTab }) {
           ) : (
             /* Cards View */
             <div className="qr-card-grid">
-              {visibleLinks.map((link) => {
+              {paginatedLinks.map((link) => {
                 const isStatic = link.kind === "static";
                 const url = isStatic ? link.payload || "" : dynamicUrlFor(link.id);
                 const status = linkStatus(link);
@@ -856,6 +890,31 @@ export default function Dashboard({ defaultTab }) {
                       >
                         <IconEdit size={13} /> Edit
                       </button>
+                      <button
+                        type="button"
+                        className="card-action-btn"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(url);
+                            alert("Copied link to clipboard!");
+                          } catch {
+                            window.prompt("Copy link:", url);
+                          }
+                        }}
+                      >
+                        <IconCopy size={13} /> Copy
+                      </button>
+                      {(isStatic ? (link.payload?.startsWith("http://") || link.payload?.startsWith("https://")) : Boolean(url)) && (
+                        <a
+                          href={isStatic ? link.payload : url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="card-action-btn"
+                          style={{ textDecoration: "none", color: "inherit", display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                        >
+                          <IconExternalLink size={13} /> Open
+                        </a>
+                      )}
                       {!isStatic && (
                         <button
                           type="button"
@@ -869,6 +928,50 @@ export default function Dashboard({ defaultTab }) {
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Pagination controls */}
+          {visibleLinks.length > pageSize && (
+            <div className="table-pagination-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", marginTop: "16px", padding: "12px 16px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: "10px" }}>
+              <div style={{ fontSize: "13px", color: "#6b7280" }}>
+                Showing <b>{(pageIndex - 1) * pageSize + 1}</b> to <b>{Math.min(pageIndex * pageSize, visibleLinks.length)}</b> of <b>{visibleLinks.length}</b> QR codes
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <button
+                  type="button"
+                  className="dash-btn"
+                  disabled={pageIndex <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                >
+                  ← Previous
+                </button>
+                <span style={{ fontSize: "13px", fontWeight: 600 }}>
+                  Page {pageIndex} of {totalPages}
+                </span>
+                <button
+                  type="button"
+                  className="dash-btn"
+                  disabled={pageIndex >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                >
+                  Next →
+                </button>
+                <select
+                  className="dash-input"
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setCurrentPage(1);
+                  }}
+                  style={{ padding: "4px 8px", fontSize: "12px", marginLeft: "8px" }}
+                >
+                  <option value={10}>10 / page</option>
+                  <option value={20}>20 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                </select>
+              </div>
             </div>
           )}
         </div>

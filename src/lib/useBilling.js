@@ -97,5 +97,23 @@ export function useBilling(user) {
     }
   }, [uid, user]);
 
+  // Cross-device / multi-tab auto-revalidation on window focus or visibility change
+  useEffect(() => {
+    if (!uid) return;
+    let lastRefresh = Date.now();
+    const handleRevalidate = () => {
+      if ((!document.hidden || document.visibilityState === "visible") && Date.now() - lastRefresh > 8000) {
+        lastRefresh = Date.now();
+        refreshBilling();
+      }
+    };
+    window.addEventListener("focus", handleRevalidate);
+    document.addEventListener("visibilitychange", handleRevalidate);
+    return () => {
+      window.removeEventListener("focus", handleRevalidate);
+      document.removeEventListener("visibilitychange", handleRevalidate);
+    };
+  }, [uid]);
+
   return { me: s.me, loading: s.loading, error: s.error, refresh: refreshBilling };
 }

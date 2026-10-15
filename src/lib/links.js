@@ -56,6 +56,16 @@ export async function createLinks(rows) {
   return ids;
 }
 
+// Bulk quantity generator (Pro+): generates quantity (10 - 1000) batch of QR codes
+export async function createBulkQuantity({ quantity, labelPrefix, defaultDestination, design }) {
+  const data = await api("/api/links?action=bulk-quantity", {
+    method: "POST",
+    body: { quantity, labelPrefix, defaultDestination, design },
+  });
+  triggerMyLinksRefresh();
+  return data.ids;
+}
+
 // Fetch all links owned by the signed-in user from the backend API
 export async function fetchMyLinks() {
   const res = await api("/api/links?action=list");

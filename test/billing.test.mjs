@@ -46,11 +46,11 @@ const pwSpec = { salt: "a".repeat(32), hash: "b".repeat(64), iter: 100000 };
   assert.equal(r.code, 401);
   r = await callJson(h, { method: "GET", headers: A("free1") }); assert.equal(r.code, 405); ok("auth required, POST only");
 
-  for (let i = 1; i <= 3; i++) { r = await create("free1", url(i)); assert.equal(r.code, 200); }
+  r = await create("free1", url(1)); assert.equal(r.code, 200);
   assert.equal(db._get("links", r.body.id).ownerId, "free1"); assert.equal(db._get("links", r.body.id).scans, 0);
-  r = await create("free1", url(4));
-  assert.equal(r.code, 402); assert.equal(r.body.error, "limit_reached"); assert.equal(r.body.limit, "dynamicQrs"); assert.equal(r.body.max, 3); assert.equal(r.body.upgrade, true);
-  ok("free plan: 3 editable QR codes, the 4th is refused with an upgrade hint");
+  r = await create("free1", url(2));
+  assert.equal(r.code, 402); assert.equal(r.body.error, "limit_reached"); assert.equal(r.body.limit, "dynamicQrs"); assert.equal(r.body.max, 1); assert.equal(r.body.upgrade, true);
+  ok("free plan: 1 editable QR code, the 2nd is refused with an upgrade hint");
 
   r = await create("free1", { kind: "static", payload: "WIFI:T:WPA;S:x;P:y;;", type: "wifi", label: "Wifi" }); assert.equal(r.code, 200);
   ok("static QR codes are counted separately and still allowed at the dynamic limit");
@@ -208,7 +208,7 @@ const env = {
   r = await get("pro1", "me");
   assert.equal(r.body.plan, "pro"); assert.deepEqual(r.body.usage, { dynamicQrs: 2, staticQrs: 1, monthlyScans: 123, month: "202610" });
   assert.equal(r.body.limits.monthlyScans, 20000); assert.equal(r.body.canManage, true); assert.equal(r.body.canCancel, true); assert.equal(r.body.features.bulk, true);
-  r = await get("free1", "me"); assert.equal(r.body.plan, "free"); assert.equal(r.body.limits.dynamicQrs, 3); assert.equal(r.body.canCancel, false);
+  r = await get("free1", "me"); assert.equal(r.body.plan, "free"); assert.equal(r.body.limits.dynamicQrs, 1); assert.equal(r.body.canCancel, false);
   r = await get("grant", "me"); assert.equal(r.body.plan, "business"); assert.equal(r.body.canCancel, false); ok("me: plan, limits, live usage, manage/cancel flags (admin grants can't be 'cancelled')");
 
   r = await post("free1", "checkout", { plan: "pro", interval: "monthly", provider: "stripe" });

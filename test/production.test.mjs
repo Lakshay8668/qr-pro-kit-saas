@@ -774,27 +774,25 @@ console.log("Running production repair & verification tests...");
     planStatus: "active",
   });
 
-  // Regular user bob creates 3 dynamic QRs (Free limit = 3)
-  for (let i = 1; i <= 3; i++) {
-    const res = await callJson(linksHandler, {
-      method: "POST",
-      headers: authBob,
-      query: { action: "create" },
-      body: { link: { destination: `https://example.com/${i}`, label: `Bob QR ${i}`, kind: "redirect" } },
-    });
-    assert.equal(res.code, 200);
-  }
+  // Regular user bob creates 1 dynamic QR (Free limit = 1)
+  const res = await callJson(linksHandler, {
+    method: "POST",
+    headers: authBob,
+    query: { action: "create" },
+    body: { link: { destination: `https://example.com/1`, label: `Bob QR 1`, kind: "redirect" } },
+  });
+  assert.equal(res.code, 200);
 
-  // Regular user bob tries 4th dynamic QR -> MUST fail with 402/403 limit_reached
+  // Regular user bob tries 2nd dynamic QR -> MUST fail with 402/403 limit_reached
   let bobLimitRes = await callJson(linksHandler, {
     method: "POST",
     headers: authBob,
     query: { action: "create" },
-    body: { link: { destination: "https://example.com/4", label: "Bob QR 4", kind: "redirect" } },
+    body: { link: { destination: "https://example.com/2", label: "Bob QR 2", kind: "redirect" } },
   });
   assert.equal(bobLimitRes.code, 402);
   assert.equal(bobLimitRes.body.error, "limit_reached");
-  ok("regular customer is strictly bounded by Free dynamic QR limit (3)");
+  ok("regular customer is strictly bounded by Free dynamic QR limit (1)");
 
   // Regular user bob tries password protection -> MUST fail with 402 feature_locked
   const validPwSpec = {
@@ -919,7 +917,7 @@ console.log("Running production repair & verification tests...");
   assert.ok(usersRes.body.users.length >= 2);
   const bobDoc = usersRes.body.users.find((u) => u.uid === "regular_user_bob");
   assert.ok(bobDoc);
-  assert.equal(bobDoc.qrs, 3);
+  assert.equal(bobDoc.qrs, 1);
   ok("GET /api/admin?action=users returns full customer list with accurate QR counts");
 
   // Verified admin calling links with ownerId filter

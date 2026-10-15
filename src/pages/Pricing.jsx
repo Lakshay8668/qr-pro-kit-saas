@@ -5,7 +5,7 @@ import Topbar from "../components/Topbar";
 import { useAuth } from "../lib/useAuth";
 import { useBilling } from "../lib/useBilling";
 import { api } from "../lib/api";
-import { PLANS, PLAN_ORDER, FEATURE_LABELS, LIMIT_LABELS, formatPrice, isPaidPlan } from "../../shared/plans";
+import { PLANS, PLAN_ORDER, FEATURE_LABELS, LIMIT_LABELS, formatLimitLabel, formatPrice, isPaidPlan } from "../../shared/plans";
 
 const PROVIDER_LABEL = {
   razorpay: "UPI · cards · netbanking (India) — Razorpay",
@@ -196,7 +196,7 @@ export default function Pricing() {
                 </div>
                 <ul className="plan-list">
                   {Object.entries(p.limits).map(([k, v]) => (
-                    <li key={k}><b>{v.toLocaleString("en-IN")}</b> {LIMIT_LABELS[k]}</li>
+                    <li key={k}><b>{v.toLocaleString("en-IN")}</b> {formatLimitLabel(k, v)}</li>
                   ))}
                   {Object.entries(FEATURE_LABELS).map(([k, label]) => (
                     <li key={k} className={p.features[k] ? "" : "off"}>{p.features[k] ? "✓" : "—"} {label}</li>

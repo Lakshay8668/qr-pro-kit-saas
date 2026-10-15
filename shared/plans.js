@@ -15,7 +15,7 @@ export const PLANS = {
     name: "Free",
     tagline: "Try editable QR codes",
     price: { monthly: 0, yearly: 0 },
-    limits: { dynamicQrs: 3, staticQrs: 50, monthlyScans: 500 },
+    limits: { dynamicQrs: 1, staticQrs: 50, monthlyScans: 500 },
     features: { password: false, deviceTargeting: false, bulk: false },
   },
   pro: {
@@ -54,6 +54,13 @@ export const LIMIT_LABELS = {
   dynamicQrs: "editable (dynamic) QR codes",
   staticQrs: "saved static QR codes",
   monthlyScans: "tracked scans per month",
+};
+
+export const formatLimitLabel = (k, count) => {
+  if (k === "dynamicQrs") return count === 1 ? "editable (dynamic) QR code" : "editable (dynamic) QR codes";
+  if (k === "staticQrs") return count === 1 ? "saved static QR code" : "saved static QR codes";
+  if (k === "monthlyScans") return count === 1 ? "tracked scan per month" : "tracked scans per month";
+  return LIMIT_LABELS[k] || k;
 };
 
 export const isPaidPlan = (id) => id === "pro" || id === "business";

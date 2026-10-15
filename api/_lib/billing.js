@@ -22,6 +22,7 @@ import { countLinks, monthKey, usageId } from "./quota.js";
 import { ensureUser } from "./userStore.js";
 import { applyState } from "./subscriptions.js";
 import { isAdminUid, getAdminUids } from "./adminAuth.js";
+import { sendSubscriptionSuccessEmail } from "./email.js";
 
 const json = (res, code, body) => {
   res.statusCode = code;
@@ -484,6 +485,24 @@ export function createBillingHandler({ getDb, verify, env, makeStripe, makeRazor
           now,
           serverTs,
         });
+
+        // Send transactional email confirmation (async / non-blocking)
+        try {
+          const recipientEmail = user.email || me.email;
+          if (recipientEmail) {
+            sendSubscriptionSuccessEmail({
+              toEmail: recipientEmail,
+              customerName: user.name || user.displayName || "Valued Customer",
+              planName: PLANS[targetPlan]?.name || targetPlan,
+              interval,
+              amount: PLANS[targetPlan]?.price?.[interval] ? `₹${PLANS[targetPlan].price[interval]}` : "",
+              provider: "Razorpay",
+              subscriptionId,
+            }).catch((emailErr) => console.warn("[Billing] Email notification error:", emailErr.message));
+          }
+        } catch (e) {
+          console.warn("[Billing] Email dispatch caught:", e.message);
+        }
 
         return json(res, 200, { ok: true, result, plan: targetPlan, status: "active" });
       }

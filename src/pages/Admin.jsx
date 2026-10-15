@@ -85,31 +85,39 @@ export default function Admin() {
   const [loadingUserLinks, setLoadingUserLinks] = useState(false);
   const [copiedText, setCopiedText] = useState("");
 
-  const [err, setErr] = useState(null);
+  const [authErr, setAuthErr] = useState(null);
+  const [tabErr, setTabErr] = useState(null);
+  const [isVerifiedAdmin, setIsVerifiedAdmin] = useState(false);
   const [busy, setBusy] = useState("");
 
-  const guard = useCallback(async (fn) => {
+  const guard = useCallback(async (scope, fn) => {
     try {
-      setErr(null);
-      return await fn();
+      setTabErr(null);
+      const res = await fn();
+      setIsVerifiedAdmin(true);
+      return res;
     } catch (e) {
-      setErr(e);
+      if (e?.status === 403 && !isVerifiedAdmin) {
+        setAuthErr(e);
+      } else {
+        setTabErr(e);
+      }
       return null;
     }
-  }, []);
+  }, [isVerifiedAdmin]);
 
-  const loadOverview = useCallback(() => guard(async () => setOv(await api("overview"))), [guard]);
-  const loadUsers = useCallback(() => guard(async () => setUsers((await api("users")).users)), [guard]);
+  const loadOverview = useCallback(() => guard("overview", async () => setOv(await api("overview"))), [guard]);
+  const loadUsers = useCallback(() => guard("users", async () => setUsers((await api("users")).users)), [guard]);
   const loadLinks = useCallback(
     (term = "", kind = "all") =>
-      guard(async () => {
+      guard("links", async () => {
         const query = `${term ? `&q=${encodeURIComponent(term)}` : ""}${kind !== "all" ? `&kind=${encodeURIComponent(kind)}` : ""}`;
         setLinks(await api("links", { query }));
       }),
     [guard]
   );
-  const loadBilling = useCallback(() => guard(async () => setBillingData(await api("billing"))), [guard]);
-  const loadDiag = useCallback(() => guard(async () => setDiag(await api("diagnostics"))), [guard]);
+  const loadBilling = useCallback(() => guard("billing", async () => setBillingData(await api("billing"))), [guard]);
+  const loadDiag = useCallback(() => guard("diagnostics", async () => setDiag(await api("diagnostics"))), [guard]);
 
   useEffect(() => {
     if (!user) return;
@@ -123,7 +131,7 @@ export default function Admin() {
   const act = async (key, fn, confirmMsg) => {
     if (confirmMsg && !window.confirm(confirmMsg)) return;
     setBusy(key);
-    await guard(fn);
+    await guard("action", fn);
     setBusy("");
   };
 
@@ -185,7 +193,7 @@ export default function Admin() {
 
   if (loading) return <div className="dash-page"><p className="dash-loading">Loading…</p></div>;
   if (!user) return <AuthForm />;
-  if (err && (err.status === 403 || err.status === 404 || err.status === 500 || !err.status)) return <NotAdmin info={err.data} />;
+  if (authErr && !isVerifiedAdmin) return <NotAdmin info={authErr.data} />;
 
   const TABS = [
     ["overview", "Overview"],
@@ -225,7 +233,24 @@ export default function Admin() {
           Copied <code>{copiedText}</code> to clipboard!
         </div>
       )}
-      {err && <div className="alert error">{err.message}</div>}
+      {tabErr && (
+        <div className="alert error" style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>⚠️ {tabErr?.message || "An error occurred while loading this section."}</span>
+          <button
+            type="button"
+            className="dash-btn"
+            onClick={() => {
+              if (tab === "billing") loadBilling();
+              else if (tab === "users") loadUsers();
+              else if (tab === "links") loadLinks(q, kindFilter);
+              else if (tab === "diagnostics") loadDiag();
+              else loadOverview();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* ===================== TAB 1: OVERVIEW ===================== */}
       {tab === "overview" && (

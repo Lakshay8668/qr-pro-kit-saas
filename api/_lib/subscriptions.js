@@ -10,18 +10,23 @@
 import crypto from "node:crypto";
 import { entitlementsFor } from "../../shared/plans.js";
 import { lookupPlanByProviderId } from "./providers.js";
+import { sendSubscriptionSuccessEmail } from "./email.js";
 
 const STRIPE_STATUS = { active: "active", trialing: "active", past_due: "past_due", unpaid: "past_due", canceled: "canceled", incomplete_expired: "canceled" };
 const RAZORPAY_STATUS = { active: "active", pending: "past_due", halted: "canceled", cancelled: "canceled", completed: "canceled", expired: "canceled", paused: "canceled" };
 
 /** Atomically (a) record the event id, (b) ignore it if seen/stale, (c) write the new plan state. */
 export async function applyState({ db, uid, state, eventKey, eventTs, now = () => Date.now(), serverTs }) {
-  return db.runTransaction(async (tx) => {
+  let recipientEmail = "";
+  let recipientName = "";
+  const result = await db.runTransaction(async (tx) => {
     const evRef = db.collection("billingEvents").doc(eventKey);
     const userRef = db.collection("users").doc(uid);
     const [ev, us] = await Promise.all([tx.get(evRef), tx.get(userRef)]);
     if (ev.exists) return "duplicate";
     const cur = us.exists ? us.data() : {};
+    recipientEmail = cur.email || "";
+    recipientName = cur.name || cur.displayName || "Valued Customer";
     tx.set(evRef, {
       uid,
       ts: serverTs ? serverTs() : now(),
@@ -47,6 +52,19 @@ export async function applyState({ db, uid, state, eventKey, eventTs, now = () =
     tx.set(userRef, next, { merge: true });
     return "applied";
   });
+
+  if (result === "applied" && state.planStatus === "active" && recipientEmail) {
+    sendSubscriptionSuccessEmail({
+      toEmail: recipientEmail,
+      customerName: recipientName,
+      planName: state.plan,
+      interval: state.planInterval || "monthly",
+      provider: state.planSource === "stripe" ? "Stripe" : "Razorpay",
+      subscriptionId: state.billing?.subscriptionId,
+    }).catch((e) => console.warn("[Email Notification] Async dispatch warning:", e.message));
+  }
+
+  return result;
 }
 
 /** Find the uid for a Stripe customer when an event carries no metadata. */

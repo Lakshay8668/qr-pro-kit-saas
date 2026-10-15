@@ -8,7 +8,7 @@ import Topbar from "../components/Topbar";
 import AuthForm from "../components/AuthForm";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../lib/useAuth";
-import { createLinks, dynamicUrlFor } from "../lib/links";
+import { createLinks, createBulkQuantity, dynamicUrlFor } from "../lib/links";
 import { useBilling } from "../lib/useBilling";
 import { normalizeUrl, isValidHttpUrl } from "../lib/qrPayloads";
 import { DEFAULT_DESIGN, SHAPES, EYES, buildQrSvg, svgToPngBlob, downloadBlob } from "../lib/qrRender";
@@ -70,7 +70,13 @@ export default function Bulk({ embedded = false }) {
   const { user, loading } = useAuth();
   const { me, refresh: refreshBilling } = useBilling(user);
   const [upgrade, setUpgrade] = useState(false);
+  const [bulkMode, setBulkMode] = useState("csv"); // "csv" | "quantity"
   const [text, setText] = useState("");
+  const [quantity, setQuantity] = useState(25);
+  const [labelPrefix, setLabelPrefix] = useState("Table QR");
+  const [defaultDest, setDefaultDest] = useState(
+    typeof window !== "undefined" ? `${window.location.origin}/draft` : "https://qr-pro-kit-saas-production.up.railway.app/draft"
+  );
   const [design, setDesign] = useState({ ...DEFAULT_DESIGN, frameStyle: "none" });
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
@@ -93,9 +99,62 @@ export default function Bulk({ embedded = false }) {
     setError("");
     setUpgrade(false);
     setDone("");
+
+    if (bulkMode === "quantity") {
+      const qty = parseInt(quantity, 10);
+      if (isNaN(qty) || qty < 10 || qty > 1000) {
+        return setError("Please enter a valid quantity between 10 and 1,000 QR codes.");
+      }
+      const targetUrl = (defaultDest || "").trim();
+      if (!isValidHttpUrl(targetUrl)) {
+        return setError("Please enter a valid HTTP or HTTPS placeholder destination URL.");
+      }
+      if (!me?.isAdmin && remainingDynamic !== null && qty > remainingDynamic) {
+        setUpgrade(true);
+        return setError(`Your account has ${remainingDynamic} editable QR codes remaining, but you requested ${qty}. Please reduce quantity or upgrade your plan.`);
+      }
+
+      setBusy(true);
+      try {
+        const JSZip = (await import("jszip")).default;
+        const zip = new JSZip();
+        const csv = ["index,id,label,qr_link,destination"];
+        setProgress(`Creating ${qty} dynamic QR records in durable database…`);
+        const ids = await createBulkQuantity({
+          quantity: qty,
+          labelPrefix: labelPrefix.trim() || "Batch QR",
+          defaultDestination: targetUrl,
+          design,
+        });
+        refreshBilling();
+        for (let i = 0; i < ids.length; i++) {
+          setProgress(`Rendering image ${i + 1} of ${ids.length}…`);
+          const id = ids[i];
+          const rowLabel = `${labelPrefix.trim() || "Batch QR"} #${i + 1}`;
+          const link = dynamicUrlFor(id);
+          const png = await svgToPngBlob(buildQrSvg(link, design, { size: 1024 }));
+          zip.file(`${String(i + 1).padStart(4, "0")}-${slug(rowLabel)}.png`, png);
+          csv.push([i + 1, id, rowLabel, link, targetUrl].map((v) => `"${String(v).replace(/"/g, '""')}"`).join(","));
+        }
+        zip.file("mapping.csv", csv.join("\n"));
+        setProgress("Packaging ZIP download…");
+        downloadBlob(await zip.generateAsync({ type: "blob" }), `qr-bulk-${qty}.zip`);
+        setDone(`Successfully generated ${qty} editable QR codes in draft mode! Downloaded ZIP containing high-resolution PNGs and mapping.csv. All records are ready in your Dashboard.`);
+      } catch (e) {
+        setError(e?.message || "Bulk quantity generation failed.");
+        setUpgrade(!!e?.upgrade);
+      } finally {
+        setBusy(false);
+        setProgress("");
+      }
+      return;
+    }
+
+    // Mode A: CSV upload
     const { rows, bad } = parse(text);
     if (!rows.length) return setError("No valid lines found. Use one per line: label,https://example.com");
-    if (rows.length > MAX_ROWS) return setError(`Please keep it to ${MAX_ROWS} rows per batch (you have ${rows.length}).`);
+    const maxAllowed = me?.isAdmin ? 1000 : MAX_ROWS;
+    if (rows.length > maxAllowed) return setError(`Please keep it to ${maxAllowed} rows per batch (you have ${rows.length}).`);
     if (!me?.isAdmin && remainingDynamic !== null && rows.length > remainingDynamic) {
       setUpgrade(true);
       return setError(`Your account has ${remainingDynamic} editable QR codes remaining, but you entered ${rows.length}. Please reduce the list or upgrade your plan.`);
@@ -136,24 +195,82 @@ export default function Bulk({ embedded = false }) {
         <div className="card form-card">
           <div className="card-title">
             <div>
-              <h2>Bulk create editable QR codes</h2>
-              <p>One line per QR: <code>label,url</code> — e.g. restaurant tables, products, branches. Max {MAX_ROWS}.</p>
+              <h2>Bulk QR Code Generator</h2>
+              <p>Batch create editable QR codes for menus, retail products, inventory, badges, or branch locations.</p>
             </div>
           </div>
 
-          <label>
-            Upload CSV (optional)
-            <input type="file" accept=".csv,.txt,text/csv,text/plain" onChange={onFile} />
-          </label>
-          <label>
-            Lines
-            <textarea
-              rows={10}
-              placeholder={"Table 1,https://menu.example.com/t1\nTable 2,https://menu.example.com/t2"}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-            />
-          </label>
+          <div style={{ display: "flex", gap: "10px", marginBottom: "18px" }}>
+            <button
+              type="button"
+              className={`chip ${bulkMode === "csv" ? "chip-on" : ""}`}
+              onClick={() => { setBulkMode("csv"); setError(""); }}
+            >
+              Mode A: CSV / Custom Links
+            </button>
+            <button
+              type="button"
+              className={`chip ${bulkMode === "quantity" ? "chip-on" : ""}`}
+              onClick={() => { setBulkMode("quantity"); setError(""); }}
+            >
+              Mode B: Quantity Generator (10–1000)
+            </button>
+          </div>
+
+          {bulkMode === "csv" ? (
+            <>
+              <label>
+                Upload CSV (optional)
+                <input type="file" accept=".csv,.txt,text/csv,text/plain" onChange={onFile} />
+              </label>
+              <label>
+                Lines (one per line: <code>label,https://example.com</code>)
+                <textarea
+                  rows={8}
+                  placeholder={"Table 1,https://menu.example.com/t1\nTable 2,https://menu.example.com/t2"}
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <div className="row2">
+                <label>
+                  Quantity (10 – 1,000)
+                  <input
+                    type="number"
+                    min="10"
+                    max="1000"
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                  />
+                </label>
+                <label>
+                  Label Prefix
+                  <input
+                    type="text"
+                    maxLength={30}
+                    placeholder="e.g. Table, Seat, Shelf"
+                    value={labelPrefix}
+                    onChange={(e) => setLabelPrefix(e.target.value)}
+                  />
+                </label>
+              </div>
+              <label>
+                Default / Draft Target URL
+                <input
+                  type="url"
+                  placeholder="https://yourbrand.com/welcome"
+                  value={defaultDest}
+                  onChange={(e) => setDefaultDest(e.target.value)}
+                />
+                <span className="field-hint" style={{ marginTop: "4px" }}>
+                  All generated QR codes will initially redirect here. You can re-assign any QR's target URL individually anytime from the Dashboard without changing the printed codes.
+                </span>
+              </label>
+            </>
+          )}
 
           <div className="options-grid three">
             <label>
@@ -246,7 +363,7 @@ export default function Bulk({ embedded = false }) {
       <div className="overview-welcome-card" style={{ marginBottom: "20px" }}>
         <div className="welcome-text-col">
           <h2>Bulk QR Code Generator</h2>
-          <p>One line per QR: <code>label,url</code> — e.g. restaurant tables, products, branches. Generates a ZIP of branded PNGs + mapping CSV.</p>
+          <p>Generate high-volume batches of branded editable QR codes via CSV upload or custom quantity (10–1,000) with ZIP export and mapping CSV.</p>
         </div>
         <div className="welcome-action-col">
           <Link to="/dashboard?tab=links" className="secondary-btn">

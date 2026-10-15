@@ -355,9 +355,16 @@ export default function EditQrModal({ link, uid, features, onClose, onCreatedNew
               <div className="read-only-content-box">
                 <div className="box-header">
                   <span>Encoded Destination / Content (Read-Only)</span>
-                  <button type="button" className="mini-action-btn" onClick={handleCopyPayload}>
-                    {copiedPayload ? <><IconCheck size={13} /> Copied</> : <><IconCopy size={13} /> Copy</>}
-                  </button>
+                  <div className="box-header-actions" style={{ display: "flex", gap: "6px" }}>
+                    <button type="button" className="mini-action-btn" onClick={handleCopyPayload}>
+                      {copiedPayload ? <><IconCheck size={13} /> Copied</> : <><IconCopy size={13} /> Copy</>}
+                    </button>
+                    {(link.payload?.startsWith("http://") || link.payload?.startsWith("https://")) && (
+                      <a href={link.payload} target="_blank" rel="noreferrer" className="mini-action-btn">
+                        <IconExternalLink size={13} /> Open
+                      </a>
+                    )}
+                  </div>
                 </div>
                 <div className="content-display">{link.payload || "—"}</div>
               </div>

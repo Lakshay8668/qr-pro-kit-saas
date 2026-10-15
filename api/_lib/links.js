@@ -117,19 +117,29 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
   }
 
   async function writeMany(db, docs) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const ids = new Set();
-      while (ids.size < docs.length) ids.add(newId());
-      const list = [...ids];
-      const batch = db.batch();
-      docs.forEach((d, i) => batch.create(db.collection("links").doc(list[i]), d));
-      try {
-        await batch.commit();
-        return list;
-      } catch (e) {
-        if (!alreadyExists(e) || attempt === 1) throw e;
+    const CHUNK_SIZE = 400;
+    const allIds = [];
+    for (let offset = 0; offset < docs.length; offset += CHUNK_SIZE) {
+      const slice = docs.slice(offset, offset + CHUNK_SIZE);
+      let committed = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const ids = new Set();
+        while (ids.size < slice.length) ids.add(newId());
+        const list = [...ids];
+        const batch = db.batch();
+        slice.forEach((d, i) => batch.create(db.collection("links").doc(list[i]), d));
+        try {
+          await batch.commit();
+          allIds.push(...list);
+          committed = true;
+          break;
+        } catch (e) {
+          if (!alreadyExists(e) || attempt === 2) throw e;
+        }
       }
+      if (!committed) throw new Error("Batch write commit failed.");
     }
+    return allIds;
   }
 
   return async function handler(req, res) {
@@ -225,6 +235,45 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
           throw limitFail(ent, "dynamicQrs", used.dynamicQrs, ` This batch needs ${docs.length} but only ${left} are left.`);
         }
         return json(res, 200, { ids: await writeMany(db, docs) });
+      }
+
+      // ------------------------------------------------------------- POST: bulk quantity
+      if (req.method === "POST" && action === "bulk-quantity") {
+        locked(ent, "bulk", "Bulk creation");
+        const qty = parseInt(body.quantity, 10);
+        if (!Number.isInteger(qty) || qty < 10 || qty > 1000) {
+          throw new Fail(400, "bad_request", "Quantity must be an integer between 10 and 1,000.");
+        }
+        const used = await countLinks(db, me.uid);
+        if (!isAdmin && used.dynamicQrs + qty > ent.dynamicQrs) {
+          const left = Math.max(0, ent.dynamicQrs - used.dynamicQrs);
+          throw limitFail(ent, "dynamicQrs", used.dynamicQrs, ` Generating ${qty} QR codes exceeds your remaining allowance of ${left}.`);
+        }
+        const baseLabel = String(body.labelPrefix || body.prefix || "Batch QR").trim().slice(0, 50) || "Batch QR";
+        const defaultDest = isHttpUrl(body.defaultDestination) ? body.defaultDestination.trim() : "https://qr-pro-kit-saas-production.up.railway.app/draft";
+        const cleanDes = cleanDesign(body.design);
+        const docs = [];
+        for (let i = 1; i <= qty; i++) {
+          docs.push({
+            kind: "redirect",
+            destination: defaultDest,
+            payload: null,
+            destinations: null,
+            bio: null,
+            password: null,
+            label: `${baseLabel} #${i}`,
+            type: "url",
+            design: cleanDes,
+            scans: 0,
+            active: true,
+            expiresAt: null,
+            maxScans: null,
+            isDraft: true,
+            ownerId: me.uid,
+            createdAt: serverTs(),
+          });
+        }
+        return json(res, 200, { ids: await writeMany(db, docs), quantity: qty });
       }
 
       // ------------------------------------------------------------- POST: update link

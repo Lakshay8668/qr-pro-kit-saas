@@ -40,7 +40,7 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
     ]);
     const users = u.docs.map((d) => ({ uid: d.id, ...d.data() }));
     const links = l.docs.map((d) => ({ id: d.id, ...d.data() }));
-    const events = (ev.docs || []).map((d) => ({ id: d.id, ...d.data() }));
+    const events = (ev.docs || []).map((d) => ({ ...d.data(), id: d.data()?.id || d.id }));
     const byUid = new Map(users.map((x) => [x.uid, x]));
     return { users, links, events, byUid };
   }
@@ -91,14 +91,15 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
       } catch {
         return json(res, 401, { error: "bad_token" });
       }
-      if (!adminUids().includes(me.uid)) return json(res, 403, { error: "not_admin", uid: me.uid, email: me.email || "" });
+      const uidsList = typeof adminUids === "function" ? adminUids() : (Array.isArray(adminUids) ? adminUids : []);
+      if (!uidsList.includes(me.uid)) return json(res, 403, { error: "not_admin", uid: me.uid, email: me.email || "" });
 
       const db = getDb();
       const action = String(req.query?.action || "");
 
       // ------------------------------------------------------------ reads
       if (req.method === "GET") {
-        const { users, links, byUid } = await loadAll(db);
+        const { users, links, events, byUid } = await loadAll(db);
 
         if (action === "overview") {
           const t = now();
@@ -197,19 +198,22 @@ export function createAdminHandler({ getDb, verify, adminUids, setAuthDisabled, 
           }, 0);
 
           const eventRows = (events || [])
-            .map((e) => ({
-              id: e.id,
-              uid: e.uid,
-              userEmail: emailOf(byUid, e.uid),
-              provider: e.provider || (e.id.startsWith("rzp") ? "razorpay" : e.id.startsWith("stripe") ? "stripe" : "unknown"),
-              plan: e.plan || "pro",
-              interval: e.interval || "monthly",
-              subscriptionId: e.subscriptionId || "",
-              paymentId: e.paymentId || "",
-              status: e.status || "active",
-              mode: (e.id.includes("test") || e.provider === "test" || creds?.keyMode === "test") ? "test" : "live",
-              ts: ms(e.ts),
-            }))
+            .map((e) => {
+              const idStr = e?.id ? String(e.id) : "";
+              return {
+                id: idStr || "unknown",
+                uid: e?.uid || "",
+                userEmail: emailOf(byUid, e?.uid),
+                provider: e?.provider || (idStr.startsWith("rzp") ? "razorpay" : idStr.startsWith("stripe") ? "stripe" : "unknown"),
+                plan: e?.plan || "pro",
+                interval: e?.interval || "monthly",
+                subscriptionId: e?.subscriptionId || "",
+                paymentId: e?.paymentId || "",
+                status: e?.status || "active",
+                mode: (idStr.includes("test") || e?.provider === "test" || creds?.keyMode === "test") ? "test" : "live",
+                ts: ms(e?.ts),
+              };
+            })
             .sort((a, b) => b.ts - a.ts)
             .slice(0, 100);
 
