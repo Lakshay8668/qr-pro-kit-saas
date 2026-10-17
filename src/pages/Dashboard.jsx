@@ -181,12 +181,12 @@ function AnalyticsModal({ link, onClose }) {
 function LinkRow({ link, onEdit, onAnalytics }) {
   const [copied, setCopied] = useState(false);
   const isStatic = link.kind === "static";
-  const url = isStatic ? link.payload || "" : dynamicUrlFor(link.id);
+  const url = isStatic ? link.payload || "" : (link.shortUrl || dynamicUrlFor(link.slug || link.id));
   const status = linkStatus(link);
 
   const thumbSvg = useMemo(() => {
     try {
-      const renderVal = url || dynamicUrlFor(link.id) || "https://typqr.com";
+      const renderVal = url || "https://typqr.com";
       return buildQrSvg(renderVal, link.design || {}, { size: 48 });
     } catch {
       return "";

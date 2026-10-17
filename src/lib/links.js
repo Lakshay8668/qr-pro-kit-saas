@@ -7,10 +7,10 @@ import {
   collection, doc, getDocs, onSnapshot,
   query, where, orderBy, limit, writeBatch, Timestamp,
 } from "firebase/firestore";
-import { db, getFirestoreStatus, setFirestoreUnavailable, setFirestoreAvailable } from "./firebase";
-import { api } from "./api";
-import { isValidHttpUrl } from "./qrPayloads";
-import { cleanBio, cleanDesign, cleanDestinations, cleanMax } from "../../shared/linkClean";
+import { db, getFirestoreStatus, setFirestoreUnavailable, setFirestoreAvailable } from "./firebase.js";
+import { api } from "./api.js";
+import { isValidHttpUrl } from "./qrPayloads.js";
+import { cleanBio, cleanDesign, cleanDestinations, cleanMax } from "../../shared/linkClean.js";
 
 export { cleanBio };
 
@@ -20,13 +20,49 @@ const toTs = (date) => (date ? Timestamp.fromDate(date) : null);
 /** Public base for QR links — set VITE_PUBLIC_BASE_URL to use your own short domain. */
 export const publicBase = () => {
   const runtimeConfig = (typeof window !== "undefined" && window.__APP_CONFIG__) || {};
+  const nodeEnv = (typeof process !== "undefined" && process.env) || {};
   return (
     runtimeConfig.publicBaseUrl ||
-    import.meta.env.VITE_PUBLIC_BASE_URL ||
-    (typeof window !== "undefined" ? window.location.origin : "")
+    ((typeof import.meta !== "undefined" && import.meta.env?.VITE_PUBLIC_BASE_URL) || "") ||
+    nodeEnv.PUBLIC_BASE_URL ||
+    nodeEnv.VITE_PUBLIC_BASE_URL ||
+    (nodeEnv.RAILWAY_PUBLIC_DOMAIN ? `https://${nodeEnv.RAILWAY_PUBLIC_DOMAIN}` : "") ||
+    (typeof window !== "undefined" && window.location ? window.location.origin : "") ||
+    "https://qr-pro-kit-saas-production.up.railway.app"
   ).replace(/\/+$/, "");
 };
-export const dynamicUrlFor = (id) => `${publicBase()}/q/${id}`;
+
+/**
+ * Bitly-style TypQR short URL (/r/:slug).
+ * Accepts either a link object (with slug/id/shortUrl) or a slug/id string.
+ */
+export const shortUrlFor = (linkOrSlug) => {
+  if (!linkOrSlug) return "";
+  if (typeof linkOrSlug === "string") {
+    if (/^https?:\/\//i.test(linkOrSlug)) return linkOrSlug;
+    return `${publicBase()}/r/${linkOrSlug}`;
+  }
+  if (linkOrSlug.shortUrl && /^https?:\/\//i.test(linkOrSlug.shortUrl)) {
+    return linkOrSlug.shortUrl;
+  }
+  const slug = linkOrSlug.slug || linkOrSlug.id || "";
+  return slug ? `${publicBase()}/r/${slug}` : "";
+};
+
+/** Dynamic URL for links — uses canonical TypQR short link (/r/:slug). */
+export const dynamicUrlFor = (linkOrId) => shortUrlFor(linkOrId);
+
+/**
+ * Resolves a Google Maps URL, short link, or raw Place ID into an official direct Google review URL.
+ * Direct review URL format: https://search.google.com/local/writereview?placeid=PLACE_ID
+ * Standalone: Does not require authentication or TypQR short links.
+ */
+export async function resolveGoogleReviewLink(inputUrl) {
+  return await api("/api/links?action=resolve-google-review", {
+    method: "POST",
+    body: { url: inputUrl },
+  });
+}
 
 function toServerLink({
   destination = "", label, type = "url", kind = "redirect", payload = "", bio = null,
@@ -100,6 +136,7 @@ export async function updateLink(id, patch = {}) {
   }
   if ("maxScans" in patch) out.maxScans = cleanMax(patch.maxScans);
   if ("design" in patch) out.design = cleanDesign(patch.design);
+  if ("slug" in patch && patch.slug) out.slug = (patch.slug || "").trim();
   if (!Object.keys(out).length) return;
 
   const res = await api("/api/links?action=update", {

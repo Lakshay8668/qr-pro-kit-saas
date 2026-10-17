@@ -208,10 +208,10 @@ const server = http.createServer(async (req, res) => {
     return res.end(JSON.stringify(getPublicClientConfig()));
   }
 
-  // 2. Dynamic QR redirect: /q/:id
-  const qMatch = pathname.match(/^\/q\/([A-Za-z0-9_-]+)$/);
-  if (qMatch) {
-    req.query.id = qMatch[1];
+  // 2. Dynamic QR redirect: /q/:id and /r/:slug
+  const redirectMatch = pathname.match(/^\/(?:q|r)\/([A-Za-z0-9_-]+)$/);
+  if (redirectMatch) {
+    req.query.id = redirectMatch[1];
     try {
       const handlers = await getHandlers();
       return await handlers.redirect(req, res);
@@ -261,10 +261,14 @@ const server = http.createServer(async (req, res) => {
       const handlers = await getHandlers();
       if (pathname === "/api/billing") return await handlers.billing(req, res);
       if (pathname === "/api/links") return await handlers.links(req, res);
+      if (pathname === "/api/google-review") {
+        req.query.action = "resolve-google-review";
+        return await handlers.links(req, res);
+      }
       if (pathname === "/api/admin") return await handlers.admin(req, res);
       if (pathname === "/api/users") return await handlers.users(req, res);
-      if (pathname.startsWith("/api/q/")) {
-        const idMatch = pathname.match(/^\/api\/q\/([A-Za-z0-9_-]+)$/);
+      if (pathname.startsWith("/api/q/") || pathname.startsWith("/api/r/")) {
+        const idMatch = pathname.match(/^\/api\/(?:q|r)\/([A-Za-z0-9_-]+)$/);
         if (idMatch) req.query.id = idMatch[1];
         return await handlers.redirect(req, res);
       }

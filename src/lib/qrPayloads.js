@@ -194,7 +194,7 @@ export function buildPayload(type, data = {}) {
     }
 
     case "review": {
-      const v = (data.placeId || "").trim();
+      const v = (data.reviewUrl || data.placeId || "").trim();
       if (!v) return "";
       if (/^https?:\/\//i.test(v)) return isValidHttpUrl(v) ? v : "";
       return `https://search.google.com/local/writereview?placeid=${encodeURIComponent(v)}`;

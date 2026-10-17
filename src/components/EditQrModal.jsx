@@ -96,7 +96,7 @@ export default function EditQrModal({ link, uid, features, onClose, onCreatedNew
 
   const patchDesign = (p) => setDesign((d) => ({ ...d, ...p }));
 
-  const dynamicUrl = dynamicUrlFor(link.id);
+  const dynamicUrl = link.shortUrl || dynamicUrlFor(link.slug || link.id);
   const qrDisplayValue = isStatic ? link.payload || "" : dynamicUrl;
 
   const handleCopyLink = async () => {

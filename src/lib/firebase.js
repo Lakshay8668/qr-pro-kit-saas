@@ -8,14 +8,15 @@ import { getAuth } from "firebase/auth";
 
 // Resolve configuration: prefer runtime injected window.__APP_CONFIG__ (from Railway server), fallback to Vite build-time env
 const runtimeConfig = (typeof window !== "undefined" && window.__APP_CONFIG__) || {};
+const metaEnv = (typeof import.meta !== "undefined" && import.meta.env) || {};
 
 export const firebaseConfig = {
-  apiKey: runtimeConfig.apiKey || import.meta.env.VITE_FIREBASE_API_KEY || "",
-  authDomain: runtimeConfig.authDomain || import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "",
-  projectId: runtimeConfig.projectId || import.meta.env.VITE_FIREBASE_PROJECT_ID || "",
-  storageBucket: runtimeConfig.storageBucket || import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "",
-  messagingSenderId: runtimeConfig.messagingSenderId || import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
-  appId: runtimeConfig.appId || import.meta.env.VITE_FIREBASE_APP_ID || "",
+  apiKey: runtimeConfig.apiKey || metaEnv.VITE_FIREBASE_API_KEY || "",
+  authDomain: runtimeConfig.authDomain || metaEnv.VITE_FIREBASE_AUTH_DOMAIN || "",
+  projectId: runtimeConfig.projectId || metaEnv.VITE_FIREBASE_PROJECT_ID || "",
+  storageBucket: runtimeConfig.storageBucket || metaEnv.VITE_FIREBASE_STORAGE_BUCKET || "",
+  messagingSenderId: runtimeConfig.messagingSenderId || metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || "",
+  appId: runtimeConfig.appId || metaEnv.VITE_FIREBASE_APP_ID || "",
 };
 
 export function isValidApiKey(key) {

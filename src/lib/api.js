@@ -1,5 +1,5 @@
 // src/lib/api.js — calls our own Vercel functions with the signed-in user's Firebase ID token.
-import { auth } from "./firebase";
+import { auth } from "./firebase.js";
 
 export class ApiError extends Error {
   constructor(data = {}, status = 0) {
@@ -11,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/+$/, "");
+const API_BASE = ((typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE_URL) || "").replace(/\/+$/, "");
 
 export async function api(path, { method = "GET", body, signedIn = true } = {}) {
   const headers = { "Content-Type": "application/json" };

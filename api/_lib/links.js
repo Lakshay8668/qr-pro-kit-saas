@@ -12,6 +12,17 @@ import { countLinks } from "./quota.js";
 import { cleanBio, cleanDesign, cleanDestinations, cleanMax, cleanPasswordSpec, isHttpUrl } from "../../shared/linkClean.js";
 import { ensureUser } from "./userStore.js";
 import { isAdminUid } from "./adminAuth.js";
+import { resolveGoogleMapsUrl } from "./googleReview.js";
+
+export function getPublicBaseUrl() {
+  const env = process.env;
+  return (
+    env.PUBLIC_BASE_URL ||
+    env.VITE_PUBLIC_BASE_URL ||
+    (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : "") ||
+    "https://qr-pro-kit-saas-production.up.railway.app"
+  ).replace(/\/+$/, "");
+}
 
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const MAX_BULK = 200;
@@ -86,6 +97,11 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         if (!Number.isFinite(ms)) throw new Error("Invalid expiry date.");
         expiresAt = new Date(ms);
       }
+      let slug = null;
+      if (kind !== "static" && raw.slug && /^[A-Za-z0-9_-]{4,30}$/.test(String(raw.slug).trim())) {
+        slug = String(raw.slug).trim();
+      }
+      const base = getPublicBaseUrl();
       return {
         kind, destination, payload, destinations, bio, password,
         label: String(raw.label || "").trim().slice(0, 120) || "Untitled",
@@ -96,6 +112,8 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         expiresAt,
         maxScans: kind === "static" ? null : cleanMax(raw.maxScans),
         ownerId: uid,
+        slug: slug || null,
+        shortUrl: slug ? `${base}/r/${slug}` : null,
         createdAt: serverTs(),
       };
     } catch (e) {
@@ -105,12 +123,27 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
   }
 
   async function writeOne(db, doc) {
+    const isDynamic = doc.kind !== "static";
+    const base = getPublicBaseUrl();
     for (let i = 0; i < 6; i++) {
       const id = newId();
+      if (isDynamic) {
+        if (!doc.slug) doc.slug = id;
+        doc.shortUrl = `${base}/r/${doc.slug}`;
+        // Collision check: verify no other link has this slug
+        try {
+          const colQuery = await db.collection("links").where("slug", "==", doc.slug).limit(1).get();
+          if (!colQuery.empty) {
+            doc.slug = null;
+            continue;
+          }
+        } catch {}
+      }
       try {
         await db.collection("links").doc(id).create(doc);
-        return id;
+        return { id, slug: doc.slug, shortUrl: doc.shortUrl };
       } catch (e) {
+        if (isDynamic) doc.slug = null;
         if (!alreadyExists(e) || i === 5) throw e;
       }
     }
@@ -119,6 +152,7 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
   async function writeMany(db, docs) {
     const CHUNK_SIZE = 400;
     const allIds = [];
+    const base = getPublicBaseUrl();
     for (let offset = 0; offset < docs.length; offset += CHUNK_SIZE) {
       const slice = docs.slice(offset, offset + CHUNK_SIZE);
       let committed = false;
@@ -127,7 +161,14 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         while (ids.size < slice.length) ids.add(newId());
         const list = [...ids];
         const batch = db.batch();
-        slice.forEach((d, i) => batch.create(db.collection("links").doc(list[i]), d));
+        slice.forEach((d, i) => {
+          const id = list[i];
+          if (d.kind !== "static") {
+            if (!d.slug) d.slug = id;
+            d.shortUrl = `${base}/r/${d.slug}`;
+          }
+          batch.create(db.collection("links").doc(id), d);
+        });
         try {
           await batch.commit();
           allIds.push(...list);
@@ -145,6 +186,18 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
   return async function handler(req, res) {
     try {
       const action = String(req.query?.action || "");
+
+      // ------------------------------------------------------------- PUBLIC: resolve Google Review URL
+      if (action === "resolve-google-review") {
+        const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+        const urlToResolve = body.url || body.input || req.query?.url || "";
+        const result = await resolveGoogleMapsUrl(urlToResolve);
+        if (!result.ok) {
+          return json(res, 400, result);
+        }
+        return json(res, 200, result);
+      }
+
       if (req.method === "GET") {
         if (!["list", "get", "scans"].includes(action)) {
           return json(res, 405, { error: "method_not_allowed" });
@@ -174,7 +227,17 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       // ------------------------------------------------------------- GET: list links
       if (req.method === "GET" && action === "list") {
         const snap = await db.collection("links").where("ownerId", "==", me.uid).get();
-        const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const base = getPublicBaseUrl();
+        const rows = snap.docs.map((d) => {
+          const data = d.data();
+          const row = { id: d.id, ...data };
+          if (row.kind !== "static" && !row.shortUrl) {
+            const s = row.slug || row.id;
+            row.slug = s;
+            row.shortUrl = `${base}/r/${s}`;
+          }
+          return row;
+        });
         rows.sort((a, b) => {
           const ta = a.createdAt?.toMillis ? a.createdAt.toMillis() : a.createdAt ? new Date(a.createdAt).getTime() : 0;
           const tb = b.createdAt?.toMillis ? b.createdAt.toMillis() : b.createdAt ? new Date(b.createdAt).getTime() : 0;
@@ -191,7 +254,13 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         if (!snap.exists) throw new Fail(404, "not_found", "Link not found.");
         const data = snap.data();
         if (data.ownerId !== me.uid && !isAdmin) throw new Fail(403, "forbidden", "Access denied.");
-        return json(res, 200, { link: { id: snap.id, ...data } });
+        const row = { id: snap.id, ...data };
+        if (row.kind !== "static" && !row.shortUrl) {
+          const s = row.slug || row.id;
+          row.slug = s;
+          row.shortUrl = `${getPublicBaseUrl()}/r/${s}`;
+        }
+        return json(res, 200, { link: row });
       }
 
       // ------------------------------------------------------------- GET: scan history
@@ -215,7 +284,12 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         const used = await countLinks(db, me.uid);
         const key = doc.kind === "static" ? "staticQrs" : "dynamicQrs";
         if (!isAdmin && used[key] >= ent[key]) throw limitFail(ent, key, used[key]);
-        return json(res, 200, { id: await writeOne(db, doc) });
+        const result = await writeOne(db, doc);
+        return json(res, 200, {
+          id: result.id,
+          slug: result.slug || result.id,
+          shortUrl: result.shortUrl || (doc.kind !== "static" ? `${getPublicBaseUrl()}/r/${result.id}` : null),
+        });
       }
 
       // ------------------------------------------------------------- POST: bulk create
@@ -336,6 +410,16 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         }
         if ("maxScans" in patch) out.maxScans = cleanMax(patch.maxScans);
         if ("design" in patch) out.design = cleanDesign(patch.design);
+        if ("slug" in patch && patch.slug) {
+          const s = String(patch.slug).trim();
+          if (!/^[A-Za-z0-9_-]{4,40}$/.test(s)) throw new Fail(400, "bad_request", "Invalid slug format.");
+          const colQuery = await db.collection("links").where("slug", "==", s).limit(1).get();
+          if (!colQuery.empty && colQuery.docs[0].id !== id) {
+            throw new Fail(409, "slug_taken", "This short link slug is already taken.");
+          }
+          out.slug = s;
+          out.shortUrl = `${getPublicBaseUrl()}/r/${s}`;
+        }
 
         await ref.update(out);
         return json(res, 200, { ok: true, id });

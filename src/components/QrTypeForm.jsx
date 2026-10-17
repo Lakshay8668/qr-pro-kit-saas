@@ -2,6 +2,7 @@
 
 import { QR_TYPES } from "../lib/qrPayloads";
 import BioEditor from "./BioEditor";
+import GoogleReviewGenerator from "./GoogleReviewGenerator";
 import { MAX_UPLOAD_MB } from "../lib/storage";
 import { isStorageConfigured } from "../lib/firebase";
 
@@ -153,15 +154,7 @@ export default function QrTypeForm({ type, setType, data, setData }) {
       )}
 
       {type === "review" && (
-        <label>
-          Google Place ID or review link
-          <input
-            type="text"
-            placeholder="ChIJ… or https://g.page/r/…/review"
-            value={data.placeId || ""}
-            onChange={set("placeId")}
-          />
-        </label>
+        <GoogleReviewGenerator data={data} setData={setData} />
       )}
 
       {type === "map" && (

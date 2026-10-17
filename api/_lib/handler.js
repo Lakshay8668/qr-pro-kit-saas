@@ -96,8 +96,21 @@ export function createHandler(deps) {
     let ref, data;
     try {
       ref = getDb().collection("links").doc(id);
-      const snap = await ref.get();
-      if (!snap.exists) return send(res, 404, messagePage("This QR code isn't active", "The link it pointed to may have been removed or is invalid."));
+      let snap = await ref.get();
+      if (!snap.exists) {
+        const col = getDb().collection("links");
+        if (typeof col.where === "function") {
+          const slugQuery = await col.where("slug", "==", id).limit(1).get();
+          if (slugQuery && !slugQuery.empty) {
+            snap = slugQuery.docs[0];
+            ref = snap.ref;
+          } else {
+            return send(res, 404, messagePage("This QR code isn't active", "The link it pointed to may have been removed or is invalid."));
+          }
+        } else {
+          return send(res, 404, messagePage("This QR code isn't active", "The link it pointed to may have been removed or is invalid."));
+        }
+      }
       data = snap.data();
     } catch (e) {
       console.error("link lookup failed", e);
@@ -135,7 +148,8 @@ export function createHandler(deps) {
           const form = await readForm(req);
           if (passwordMatches(form.password || "", data.password)) {
             attempts.delete(key);
-            return redirect(res, `/q/${encodeURIComponent(id)}`, 303, {
+            const redirectPrefix = req.url && req.url.startsWith("/r/") ? "/r/" : "/q/";
+            return redirect(res, `${redirectPrefix}${encodeURIComponent(id)}`, 303, {
               "Set-Cookie": `qra_${id}=${makeToken(id)}; Max-Age=3600; Path=/; HttpOnly; Secure; SameSite=Lax`,
             });
           }
@@ -147,7 +161,8 @@ export function createHandler(deps) {
         return send(res, 200, passwordPage());
       }
     } else if (req.method === "POST") {
-      return redirect(res, `/q/${encodeURIComponent(id)}`, 303);
+      const redirectPrefix = req.url && req.url.startsWith("/r/") ? "/r/" : "/q/";
+      return redirect(res, `${redirectPrefix}${encodeURIComponent(id)}`, 303);
     }
 
     // ---- decide target
