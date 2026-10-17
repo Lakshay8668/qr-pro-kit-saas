@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import Topbar from "../components/Topbar";
+import Modal from "../components/Modal";
 import { useAuth } from "../lib/useAuth";
 import { useBilling } from "../lib/useBilling";
 import { api } from "../lib/api";
@@ -36,7 +37,16 @@ export default function Pricing() {
   const activeProvider = provider || (enabled[0] || "");
   const subscribed = me && isPaidPlan(me?.plan) && me?.source !== "admin" && !me?.cancelAtPeriodEnd;
 
-  const checkout = async (plan) => {
+  const [phoneModal, setPhoneModal] = useState(null); // { plan, phone }
+  const [phoneNumber, setPhoneNumber] = useState(user?.phoneNumber || "");
+
+  useEffect(() => {
+    if (user?.phoneNumber) {
+      setPhoneNumber(user.phoneNumber);
+    }
+  }, [user]);
+
+  const initiateCheckout = async (plan, contactNumber) => {
     setError("");
     const prov = activeProvider;
     if (!prov) {
@@ -45,12 +55,22 @@ export default function Pricing() {
     }
     setBusy(plan);
     try {
-      const data = await api("/api/billing?action=checkout", { method: "POST", body: { plan, interval, provider: prov } });
+      const data = await api("/api/billing?action=checkout", {
+        method: "POST",
+        body: {
+          plan,
+          interval,
+          provider: prov,
+          phone: contactNumber || phoneNumber || user?.phoneNumber || "",
+        },
+      });
 
       // If Razorpay credentials returned, support native modal with instant payment verification
       if (prov === "razorpay" && data.subscriptionId && data.keyId) {
         const triggerModal = () => {
           if (!window.Razorpay) return false;
+          const cleanPhone = (contactNumber || phoneNumber || user?.phoneNumber || "").replace(/[^0-9]/g, "");
+          const formattedContact = cleanPhone.length === 10 ? `+91${cleanPhone}` : cleanPhone ? `+${cleanPhone}` : "";
           const rzp = new window.Razorpay({
             key: data.keyId,
             subscription_id: data.subscriptionId,
@@ -59,8 +79,13 @@ export default function Pricing() {
             image: `${window.location.origin}/typqr-logo.png`,
             prefill: {
               email: user?.email || "",
-              name: user?.displayName || "",
-              contact: user?.phoneNumber || "",
+              name: user?.displayName || user?.email?.split("@")[0] || "Customer",
+              contact: formattedContact,
+            },
+            notes: {
+              plan,
+              interval,
+              uid: user?.uid || "",
             },
             theme: {
               color: "#4f46e5",
@@ -138,6 +163,29 @@ export default function Pricing() {
   const save = (id) => {
     const p = PLANS[id].price;
     return p.monthly ? Math.round((1 - p.yearly / (p.monthly * 12)) * 100) : 0;
+  };
+
+  const checkout = (plan) => {
+    // If provider is razorpay and user doesn't have a phone number, prompt for phone
+    if (activeProvider === "razorpay" && !(phoneNumber || user?.phoneNumber)) {
+      setPhoneModal({ plan, phone: "" });
+      return;
+    }
+    initiateCheckout(plan, phoneNumber || user?.phoneNumber || "");
+  };
+
+  const handlePhoneSubmit = (e) => {
+    e.preventDefault();
+    if (!phoneModal) return;
+    const clean = phoneModal.phone.replace(/[^0-9]/g, "");
+    if (clean.length < 10) {
+      setError("Please enter a valid 10-digit mobile number for UPI mandate notifications.");
+      return;
+    }
+    setPhoneNumber(clean);
+    const planToUpgrade = phoneModal.plan;
+    setPhoneModal(null);
+    initiateCheckout(planToUpgrade, clean);
   };
 
   const cta = (id) => {
@@ -243,6 +291,41 @@ export default function Pricing() {
           💳 <b>Payment Note:</b> Subscriptions in India use RBI-mandated recurring e-mandates (UPI AutoPay or cards).
           Need invoicing or corporate purchase assistance? Contact our team at <a href="mailto:support@engagiumtechnologies.com" style={{ color: "var(--qp-brand)" }}>support@engagiumtechnologies.com</a>.
         </p>
+
+        {phoneModal && (
+          <Modal title="Contact Mobile Number Required" onClose={() => setPhoneModal(null)}>
+            <form onSubmit={handlePhoneSubmit} className="edit-grid">
+              <p style={{ margin: "0 0 12px", fontSize: "13px", color: "var(--qp-muted)", lineHeight: 1.5 }}>
+                Under Reserve Bank of India (RBI) e-mandate guidelines, a 10-digit mobile number is mandatory to register and authenticate UPI AutoPay and card recurring mandates.
+              </p>
+              <label>
+                Mobile Number (10 digits)
+                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                  <span style={{ padding: "10px 12px", background: "#f3f4f6", borderRadius: "10px", fontWeight: 700, fontSize: "14px", border: "1px solid #d1d5db" }}>
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    placeholder="9876543210"
+                    maxLength={10}
+                    value={phoneModal.phone}
+                    onChange={(e) => setPhoneModal({ ...phoneModal, phone: e.target.value.replace(/[^0-9]/g, "") })}
+                    autoFocus
+                    required
+                  />
+                </div>
+              </label>
+              <div className="modal-foot">
+                <button type="button" className="dash-btn" onClick={() => setPhoneModal(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="primary" style={{ marginTop: 0, width: "auto" }}>
+                  Continue to Razorpay Checkout →
+                </button>
+              </div>
+            </form>
+          </Modal>
+        )}
       </section>
     </main>
   );
