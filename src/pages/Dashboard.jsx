@@ -184,10 +184,10 @@ function LinkRow({ link, onEdit, onAnalytics }) {
   const url = isStatic ? link.payload || "" : dynamicUrlFor(link.id);
   const status = linkStatus(link);
 
-  const thumb = useMemo(() => {
+  const thumbSvg = useMemo(() => {
     try {
       const renderVal = url || dynamicUrlFor(link.id) || "https://typqr.com";
-      return svgToDataUrl(buildQrSvg(renderVal, link.design || {}, { size: 96 }));
+      return buildQrSvg(renderVal, link.design || {}, { size: 48 });
     } catch {
       return "";
     }
@@ -244,8 +244,13 @@ function LinkRow({ link, onEdit, onAnalytics }) {
   return (
     <tr className="table-data-row">
       <td style={{ width: "56px" }}>
-        {thumb ? (
-          <img className="qr-table-thumb" src={thumb} alt="QR" width="48" height="48" />
+        {thumbSvg ? (
+          <div
+            className="qr-table-thumb-cell"
+            role="img"
+            aria-label="QR thumbnail"
+            dangerouslySetInnerHTML={{ __html: thumbSvg }}
+          />
         ) : (
           <div className="qr-thumb-fallback">QR</div>
         )}

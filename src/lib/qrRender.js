@@ -32,7 +32,7 @@ export const EYES = [
   { id: "circle", label: "Circle" },
 ];
 
-const QUIET = 3; // quiet-zone in modules
+const QUIET = 4; // standard 4-module quiet-zone (ISO/IEC 18004)
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
@@ -62,7 +62,9 @@ function getMatrix(value, ecl) {
 export function buildQrSvg(value, design = {}, { size = 512 } = {}) {
   const d = { ...DEFAULT_DESIGN, ...design };
   const hasLogo = !!d.logo;
-  const { n, dark } = getMatrix(value, hasLogo ? "H" : "M");
+  const isCustom = d.shape !== "square" || d.eye !== "square" || hasLogo || (d.frameStyle !== "none");
+  const ecl = hasLogo ? "H" : isCustom ? "Q" : "M";
+  const { n, dark } = getMatrix(value, ecl);
   const m = QUIET;
   const W = n + m * 2;
 
@@ -110,7 +112,7 @@ export function buildQrSvg(value, design = {}, { size = 512 } = {}) {
         const y = r + m;
         path +=
           d.shape === "dots"
-            ? circlePath(x + 0.5, y + 0.5, 0.45)
+            ? circlePath(x + 0.5, y + 0.5, 0.495)
             : rrPath(x + 0.04, y + 0.04, 0.92, 0.92, 0.3);
       }
     }
@@ -166,7 +168,7 @@ export function buildQrSvg(value, design = {}, { size = 512 } = {}) {
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${f(W)} ${f(H)}" width="${pxW}" height="${pxH}" style="max-width:100%;height:auto;display:block;">` +
     defs +
-    `<rect width="${f(W)}" height="${f(H)}" fill="${esc(d.bg)}"/>` +
+    `<rect width="${f(W)}" height="${f(H)}" fill="${esc(d.bg || '#ffffff')}"/>` +
     `<path d="${path}" fill="${fill}"${d.shape === "square" ? ' shape-rendering="crispEdges"' : ""}/>` +
     eyes +
     logoSvg +

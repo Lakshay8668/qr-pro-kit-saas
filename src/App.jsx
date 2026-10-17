@@ -68,19 +68,15 @@ export default function App({ embedded = false }) {
     if (payload) return payload;
     try {
       if (type === "pdf") {
-        return (data.url || "").trim() || "https://typqr.com/menu.pdf";
+        return (data.url || "").trim() || "";
       }
       if (type === "bio") {
-        return data.bio?.title ? "https://typqr.com/bio-demo" : "https://typqr.com";
+        return data.bio?.title ? "https://typqr.com/bio-demo" : "";
       }
       const built = buildPayload(type, data);
-      if (built) return built;
-      if (type === "url") return "https://typqr.com";
-      if (type === "whatsapp") return "https://wa.me/919876543210";
-      if (type === "upi") return "upi://pay?pa=demo@upi&pn=TypQR&cu=INR";
-      return "https://typqr.com";
+      return built || "";
     } catch {
-      return "https://typqr.com";
+      return "";
     }
   }, [payload, type, JSON.stringify(data)]);
 

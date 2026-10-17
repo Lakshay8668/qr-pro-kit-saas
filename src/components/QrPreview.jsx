@@ -118,6 +118,7 @@ export default function QrPreview({
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
+        width: size,
         maxWidth: "100%",
         position: "relative",
       }}
@@ -128,8 +129,11 @@ export default function QrPreview({
         aria-label={alt}
         data-rendered-value={trimmedValue}
         style={{
-          display: "block",
-          maxWidth: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: "100%",
+          maxWidth: size,
           lineHeight: 0,
         }}
         dangerouslySetInnerHTML={{ __html: svg }}
