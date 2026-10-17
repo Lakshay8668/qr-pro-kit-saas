@@ -2151,3 +2151,31 @@ a.plan-badge:hover{filter:brightness(.97)}
     display: none;
   }
 }
+
+/* Bulk Quantity Range Responsive Layout & TypQR Logo Styles */
+.bulk-quantity-range-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 640px) {
+  .bulk-quantity-range-row {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.brand-logo-img,
+.sidebar-brand-img {
+  max-width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.qr-preview-svg svg,
+.qr-svg-wrapper svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+

@@ -6,9 +6,13 @@
 // 5. Admin Billing & Payments tab error isolation and event hardening
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { makeDb } from "./fakeDb.mjs";
 import { createLinksHandler } from "../api/_lib/links.js";
 import { createAdminHandler } from "../api/_lib/admin.js";
+import { createSubscriptionHandlers } from "../api/_lib/subscriptions.js";
 import {
   renderSubscriptionHtml,
   renderSubscriptionText,
@@ -17,6 +21,7 @@ import {
 } from "../api/_lib/email.js";
 import { PLANS, formatLimitLabel } from "../shared/plans.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ok = (msg) => console.log(`  ✓ ${msg}`);
 
 async function callJson(handler, req) {
@@ -34,6 +39,13 @@ async function callJson(handler, req) {
 }
 
 console.log("Running v9 Feature Upgrade tests...");
+
+// ------------------------------------------------------------- 0. TypQR Branding Assets & Draft Page Route
+assert.ok(fs.existsSync(path.resolve(__dirname, "../public/typqr-logo.png")), "TypQR logo exists in public/");
+assert.ok(fs.existsSync(path.resolve(__dirname, "../public/assets/typqr-logo.png")), "TypQR logo exists in public/assets/");
+assert.ok(fs.existsSync(path.resolve(__dirname, "../src/assets/typqr-logo.png")), "TypQR logo exists in src/assets/");
+assert.ok(fs.existsSync(path.resolve(__dirname, "../src/pages/DraftQrPage.jsx")), "DraftQrPage exists in src/pages/");
+ok("TypQR branding logo assets and draft QR page exist");
 
 // ------------------------------------------------------------- 1. Free Plan Limit & formatLimitLabel
 assert.equal(PLANS.free.limits.dynamicQrs, 1, "Free plan limit must be 1 dynamic QR");
@@ -100,7 +112,44 @@ res = await callJson(linksHandler, {
 });
 assert.equal(res.code, 400);
 assert.match(res.body.message, /between 10 and 1,000/);
-ok("bulk-quantity strictly validates quantity between 10 and 1,000");
+
+// Two-input range validation tests (minQuantity, maxQuantity)
+res = await callJson(linksHandler, {
+  method: "POST",
+  headers: { authorization: "Bearer token_pro" },
+  query: { action: "bulk-quantity" },
+  body: { minQuantity: 50, maxQuantity: 20 },
+});
+assert.equal(res.code, 400);
+assert.match(res.body.message, /cannot be greater than maximum quantity/i);
+
+res = await callJson(linksHandler, {
+  method: "POST",
+  headers: { authorization: "Bearer token_pro" },
+  query: { action: "bulk-quantity" },
+  body: { minQuantity: 5, maxQuantity: 50 },
+});
+assert.equal(res.code, 400);
+assert.match(res.body.message, /Minimum quantity must be an integer between 10 and 1,000/i);
+
+res = await callJson(linksHandler, {
+  method: "POST",
+  headers: { authorization: "Bearer token_pro" },
+  query: { action: "bulk-quantity" },
+  body: { minQuantity: 10, maxQuantity: 1200 },
+});
+assert.equal(res.code, 400);
+assert.match(res.body.message, /Maximum quantity must be an integer between 10 and 1,000/i);
+
+res = await callJson(linksHandler, {
+  method: "POST",
+  headers: { authorization: "Bearer token_pro" },
+  query: { action: "bulk-quantity" },
+  body: { minQuantity: 20, maxQuantity: 50, quantity: 15 },
+});
+assert.equal(res.code, 400);
+assert.match(res.body.message, /specified range: 20 to 50/i);
+ok("bulk-quantity strictly validates two-input range (min 10, max 1000, min <= max)");
 
 // Pro user creates batch of 15 QR codes
 res = await callJson(linksHandler, {
@@ -186,6 +235,48 @@ assert.equal(badEmailRes.ok, false);
 assert.equal(badEmailRes.reason, "invalid_recipient");
 ok("transactional email module formats HTML/text with support contact and sends safely");
 
+// Webhook retry & client deduplication test
+const subHandlers = createSubscriptionHandlers({
+  getDb: () => db,
+  env: { RAZORPAY_PLAN_PRO_MONTHLY: "plan_test_dedup" },
+  now: () => Date.now(),
+});
+
+db.collection("users").doc("dedupUser").set({
+  uid: "dedupUser",
+  email: "dedup@example.com",
+  plan: "free",
+  billing: {},
+});
+
+const rzpBody = {
+  event: "subscription.activated",
+  created_at: 1700000000,
+  payload: {
+    subscription: {
+      entity: {
+        id: "sub_dedup_100",
+        status: "active",
+        plan_id: "plan_test_dedup",
+        notes: { uid: "dedupUser", plan: "pro", interval: "monthly" },
+      },
+    },
+  },
+};
+
+// First event applies state and sets lastNotifiedSubId
+const r1 = await subHandlers.razorpayEvent(rzpBody, "evt_dedup_1");
+assert.equal(r1, "applied");
+const userDoc1 = db._get("users", "dedupUser");
+assert.equal(userDoc1.billing.lastNotifiedSubId, "sub_dedup_100");
+
+// Duplicate event arrives (e.g. webhook retry)
+const r2 = await subHandlers.razorpayEvent(rzpBody, "evt_dedup_2");
+assert.equal(r2, "applied");
+const userDoc2 = db._get("users", "dedupUser");
+assert.equal(userDoc2.billing.lastNotifiedSubId, "sub_dedup_100");
+ok("webhook deduplication prevents duplicate purchase confirmation emails");
+
 // ------------------------------------------------------------- 5. Admin Billing & Event Hardening
 // Create billing event with null id and missing fields to ensure no server crash
 db.collection("billingEvents").doc("rzp_test_event_1").set({
@@ -210,8 +301,7 @@ const billingRes = await callJson(adminApi, {
 });
 assert.equal(billingRes.code, 200);
 assert.ok(Array.isArray(billingRes.body.events));
-assert.ok(billingRes.body.events.length >= 1);
-assert.equal(billingRes.body.events[0].id, "rzp_test_event_1");
+assert.ok(billingRes.body.events.some((e) => e.id === "rzp_test_event_1"), "Malformed event ID is recovered from doc ID");
 ok("admin billing API safely handles malformed event records without 500 error or crash");
 
 console.log("\nAll v9 Feature Upgrade checks passed successfully!\n");

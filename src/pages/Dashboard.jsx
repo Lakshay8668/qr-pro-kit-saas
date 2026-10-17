@@ -186,7 +186,8 @@ function LinkRow({ link, onEdit, onAnalytics }) {
 
   const thumb = useMemo(() => {
     try {
-      return svgToDataUrl(buildQrSvg(url, link.design || {}, { size: 96 }));
+      const renderVal = url || dynamicUrlFor(link.id) || "https://typqr.com";
+      return svgToDataUrl(buildQrSvg(renderVal, link.design || {}, { size: 96 }));
     } catch {
       return "";
     }
@@ -866,7 +867,7 @@ export default function Dashboard({ defaultTab }) {
                     </div>
 
                     <div className="card-qr-preview-box">
-                      <QrPreview value={url} design={link.design || {}} size={160} />
+                      <QrPreview value={url || dynamicUrlFor(link.id) || "https://typqr.com"} design={link.design || {}} size={160} />
                     </div>
 
                     <div className="card-body-content">

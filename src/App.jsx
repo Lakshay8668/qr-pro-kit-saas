@@ -63,7 +63,29 @@ export default function App({ embedded = false }) {
   const [upgrade, setUpgrade] = useState(false); // true when the last error was a plan limit
 
   const patch = (p) => setDesign((d) => ({ ...d, ...p }));
-  const warnings = useMemo(() => scanWarnings(design, payload), [design, payload]);
+
+  const livePayload = useMemo(() => {
+    if (payload) return payload;
+    try {
+      if (type === "pdf") {
+        return (data.url || "").trim() || "https://typqr.com/menu.pdf";
+      }
+      if (type === "bio") {
+        return data.bio?.title ? "https://typqr.com/bio-demo" : "https://typqr.com";
+      }
+      const built = buildPayload(type, data);
+      if (built) return built;
+      if (type === "url") return "https://typqr.com";
+      if (type === "whatsapp") return "https://wa.me/919876543210";
+      if (type === "upi") return "upi://pay?pa=demo@upi&pn=TypQR&cu=INR";
+      return "https://typqr.com";
+    } catch {
+      return "https://typqr.com";
+    }
+  }, [payload, type, JSON.stringify(data)]);
+
+  const activeDisplayPayload = payload || livePayload;
+  const warnings = useMemo(() => scanWarnings(design, activeDisplayPayload), [design, activeDisplayPayload]);
 
   const changeType = (t) => {
     setType(t);
@@ -211,9 +233,13 @@ export default function App({ embedded = false }) {
   };
 
   const download = async (format) => {
-    if (!payload) return;
+    const targetPayload = activeDisplayPayload;
+    if (!targetPayload) {
+      setError("Please enter a destination or content before downloading.");
+      return;
+    }
     try {
-      const svg = buildQrSvg(payload, design, { size });
+      const svg = buildQrSvg(targetPayload, design, { size });
       if (format === "svg") downloadSvgString(svg, `qr-${type}.svg`);
       else downloadBlob(await svgToPngBlob(svg), `qr-${type}-${size}.png`);
       syncDesign();
@@ -223,12 +249,14 @@ export default function App({ embedded = false }) {
   };
 
   const copyLink = async () => {
+    const targetPayload = activeDisplayPayload;
+    if (!targetPayload) return;
     try {
-      await navigator.clipboard.writeText(payload);
+      await navigator.clipboard.writeText(targetPayload);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      window.prompt("Copy this:", payload);
+      window.prompt("Copy this:", targetPayload);
     }
   };
 
@@ -443,22 +471,21 @@ export default function App({ embedded = false }) {
           <div className="card-title">
             <div>
               <h2>3. Preview &amp; download</h2>
-              <p>{payload ? `${typeLabel} — ready to download` : "Your QR will appear here"}</p>
+              <p>{payload ? `${typeLabel} — ready to download` : "Live interactive design preview"}</p>
             </div>
           </div>
 
           <div className="qr-stage">
-            {payload ? (
-              <QrPreview value={payload} design={design} size={320} />
-            ) : (
-              <div className="empty-qr">
-                <div>QR</div>
-                <span>Generate a code</span>
-              </div>
-            )}
+            <QrPreview
+              value={activeDisplayPayload}
+              design={design}
+              size={320}
+              loading={loading}
+              liveBadge={!payload}
+            />
           </div>
 
-          {payload && warnings.length > 0 && (
+          {activeDisplayPayload && warnings.length > 0 && (
             <div className="alert warn">
               <b>Scan check</b>
               <ul>
@@ -481,18 +508,18 @@ export default function App({ embedded = false }) {
           </label>
 
           <div className="download-row">
-            <button className="secondary" disabled={!payload} onClick={() => download("png")}>
+            <button className="secondary" disabled={!activeDisplayPayload} onClick={() => download("png")}>
               Download PNG
             </button>
-            <button className="secondary outline" disabled={!payload} onClick={() => download("svg")}>
+            <button className="secondary outline" disabled={!activeDisplayPayload} onClick={() => download("svg")}>
               Download SVG
             </button>
           </div>
-          {payload && (
+          {activeDisplayPayload && (
             <div className="qr-meta-box" style={{ marginTop: "14px", padding: "12px", background: "var(--bg-elevated, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border, #e2e8f0)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                <span className={`pill ${isDynamic || forced ? "pill-active" : "pill-static"}`}>
-                  {isDynamic || forced ? "Dynamic Tracked QR" : "Static Direct QR"}
+                <span className={`pill ${payload ? (isDynamic || forced ? "pill-active" : "pill-static") : "pill-paused"}`}>
+                  {payload ? (isDynamic || forced ? "Dynamic Tracked QR" : "Static Direct QR") : "Live Design Preview"}
                 </span>
                 {createdId ? (
                   <span className="pill pill-paused" style={{ fontFamily: "monospace", fontSize: "12px" }}>
@@ -500,20 +527,20 @@ export default function App({ embedded = false }) {
                   </span>
                 ) : (
                   <span className="pill pill-expired" style={{ fontSize: "11px" }}>
-                    Unsaved Preview
+                    Draft / Preview
                   </span>
                 )}
               </div>
               <div className="payload-row" style={{ marginTop: "6px" }}>
                 <div style={{ flex: 1, minWidth: 0, marginRight: "8px" }}>
                   <div style={{ fontSize: "11px", color: "var(--text-muted, #64748b)", fontWeight: 600, marginBottom: "2px" }}>
-                    {isDynamic || forced ? "Permanent Redirect URL" : "Direct Destination"}
+                    {payload ? (isDynamic || forced ? "Permanent Redirect URL" : "Direct Destination") : "Preview Target Content"}
                   </div>
-                  <p className="payload" style={{ margin: 0, wordBreak: "break-all" }}>{payload}</p>
+                  <p className="payload" style={{ margin: 0, wordBreak: "break-all" }}>{activeDisplayPayload}</p>
                 </div>
                 <div style={{ whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: "6px" }}>
-                  {(payload.startsWith("http://") || payload.startsWith("https://")) && (
-                    <a className="dash-btn" href={payload} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
+                  {(activeDisplayPayload.startsWith("http://") || activeDisplayPayload.startsWith("https://")) && (
+                    <a className="dash-btn" href={activeDisplayPayload} target="_blank" rel="noreferrer" style={{ textDecoration: "none", color: "inherit" }}>
                       Open
                     </a>
                   )}
@@ -581,11 +608,11 @@ export default function App({ embedded = false }) {
 
       <section className="hero">
         <div>
-          <p className="eyebrow">QR CODE GENERATOR</p>
+          <p className="eyebrow">TYPQR · SMART QR MANAGEMENT</p>
           <h1>Create QR codes that actually work for your business.</h1>
           <p className="sub">
-            17 QR types incl. UPI, PDF menus &amp; link-in-bio pages, password &amp; expiry controls, city-level scan analytics,
-            custom shapes, logo &amp; frames — free.
+            TypQR — Scan. Connect. Grow. 17 QR types incl. UPI, PDF menus &amp; link-in-bio pages, password &amp; expiry controls,
+            city-level scan analytics, custom shapes, logo &amp; frames.
           </p>
         </div>
       </section>

@@ -87,6 +87,13 @@ export default function AuthForm() {
   return (
     <div className="dash-page">
       <form onSubmit={submit} className="dash-login">
+        <Link to="/" style={{ display: "block", textAlign: "center", marginBottom: "20px" }}>
+          <img
+            src="/typqr-logo.png"
+            alt="TypQR — Scan. Connect. Grow."
+            style={{ height: "46px", width: "auto", margin: "0 auto", display: "block", objectFit: "contain" }}
+          />
+        </Link>
         <h2>{title}</h2>
         <p className="dash-auth-hint">
           {mode === "login" && "Sign in to manage your editable QR links."}

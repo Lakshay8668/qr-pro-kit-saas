@@ -164,7 +164,7 @@ export function buildQrSvg(value, design = {}, { size = 512 } = {}) {
   const pxH = Math.round((size * H) / W);
 
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${f(W)} ${f(H)}" width="${pxW}" height="${pxH}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${f(W)} ${f(H)}" width="${pxW}" height="${pxH}" style="max-width:100%;height:auto;display:block;">` +
     defs +
     `<rect width="${f(W)}" height="${f(H)}" fill="${esc(d.bg)}"/>` +
     `<path d="${path}" fill="${fill}"${d.shape === "square" ? ' shape-rendering="crispEdges"' : ""}/>` +

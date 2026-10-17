@@ -54,8 +54,17 @@ export default function Pricing() {
           const rzp = new window.Razorpay({
             key: data.keyId,
             subscription_id: data.subscriptionId,
-            name: "QR Pro Kit",
+            name: "TypQR — Smart QR Management",
             description: `${PLANS[plan].name} Plan (${interval})`,
+            image: `${window.location.origin}/typqr-logo.png`,
+            prefill: {
+              email: user?.email || "",
+              name: user?.displayName || "",
+              contact: user?.phoneNumber || "",
+            },
+            theme: {
+              color: "#4f46e5",
+            },
             handler: async (response) => {
               setBusy(plan);
               try {
@@ -80,6 +89,12 @@ export default function Pricing() {
                 setBusy("");
               },
             },
+          });
+          rzp.on("payment.failed", (response) => {
+            console.error("[Billing] Payment failed:", response.error);
+            const desc = response.error?.description || response.error?.reason || "Payment was not authorized.";
+            setError(`Payment unsuccessful: ${desc}. If paying via UPI AutoPay, ensure recurring mandates are authorized in your UPI banking app.`);
+            setBusy("");
           });
           rzp.open();
           return true;
@@ -223,6 +238,10 @@ export default function Pricing() {
         <p className="pricing-foot">
           Prices in INR, GST may apply. Cancel any time from <Link to="/billing">Billing</Link> — you keep your plan until the period you paid for ends.
           If a plan's limit is reached, your existing QR codes keep working; you just can't add more until you upgrade or free up space.
+        </p>
+        <p className="field-hint" style={{ textAlign: "center", marginTop: "12px", fontSize: "12px", color: "var(--text-muted)" }}>
+          💳 <b>Payment Note:</b> Subscriptions in India use RBI-mandated recurring e-mandates (UPI AutoPay or cards).
+          Need invoicing or corporate purchase assistance? Contact our team at <a href="mailto:support@engagiumtechnologies.com" style={{ color: "var(--qp-brand)" }}>support@engagiumtechnologies.com</a>.
         </p>
       </section>
     </main>

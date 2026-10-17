@@ -9,8 +9,12 @@ export default function Topbar() {
   const { me } = useBilling(user);
   return (
     <header className="topbar">
-      <Link className="brand" to="/">
-        QR<span>Pro</span>
+      <Link className="brand" to="/" style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
+        <img
+          src="/typqr-logo.png"
+          alt="TypQR — Scan. Connect. Grow."
+          style={{ height: "38px", width: "auto", display: "block", objectFit: "contain" }}
+        />
       </Link>
       <nav className="topbar-nav">
         <Link to="/bulk">Bulk</Link>

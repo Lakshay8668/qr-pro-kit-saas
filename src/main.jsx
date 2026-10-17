@@ -9,6 +9,7 @@ import Bulk from "./pages/Bulk";
 import Admin from "./pages/Admin";
 import Pricing from "./pages/Pricing";
 import Billing from "./pages/Billing";
+import DraftQrPage from "./pages/DraftQrPage";
 import "./styles.css";
 
 function NotFound() {
@@ -38,6 +39,7 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="/admin" element={<Admin />} />
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/billing" element={<Billing />} />
+          <Route path="/draft" element={<DraftQrPage />} />
           <Route path="/q/:id" element={<RedirectHandler />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

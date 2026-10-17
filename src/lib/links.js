@@ -56,11 +56,17 @@ export async function createLinks(rows) {
   return ids;
 }
 
-// Bulk quantity generator (Pro+): generates quantity (10 - 1000) batch of QR codes
-export async function createBulkQuantity({ quantity, labelPrefix, defaultDestination, design }) {
+// Bulk quantity generator (Pro+): generates quantity (10 - 1000) batch of QR codes within [minQuantity, maxQuantity] range
+export async function createBulkQuantity({ quantity, minQuantity, maxQuantity, defaultDestination, design }) {
   const data = await api("/api/links?action=bulk-quantity", {
     method: "POST",
-    body: { quantity, labelPrefix, defaultDestination, design },
+    body: {
+      quantity: quantity !== undefined ? quantity : minQuantity,
+      minQuantity: minQuantity || 10,
+      maxQuantity: maxQuantity || 1000,
+      defaultDestination,
+      design,
+    },
   });
   triggerMyLinksRefresh();
   return data.ids;

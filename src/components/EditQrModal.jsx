@@ -829,7 +829,7 @@ export default function EditQrModal({ link, uid, features, onClose, onCreatedNew
           <div className="preview-sticky-card">
             <div className="preview-card-title">Live QR Preview</div>
             <div className="preview-stage-wrap">
-              <QrPreview value={qrDisplayValue} design={design} size={220} />
+              <QrPreview value={qrDisplayValue || dynamicUrl || "https://typqr.com"} design={design} size={220} />
             </div>
 
             <div className="preview-meta-info">

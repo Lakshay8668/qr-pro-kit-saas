@@ -44,16 +44,28 @@ export async function applyState({ db, uid, state, eventKey, eventTs, now = () =
     if (state.planStatus === "canceled" && curBilling.subscriptionId && state.billing?.subscriptionId && curBilling.subscriptionId !== state.billing.subscriptionId) {
       return "other_subscription";
     }
+    const alreadyNotified = Boolean(
+      state.billing?.subscriptionId && curBilling.lastNotifiedSubId === state.billing?.subscriptionId
+    );
+    const shouldSendEmail = !alreadyNotified && state.planStatus === "active";
+
     const next = {
       ...state,
-      billing: { ...curBilling, ...(state.billing || {}), lastEventTs: eventTs || curBilling.lastEventTs || 0 },
+      billing: {
+        ...curBilling,
+        ...(state.billing || {}),
+        lastEventTs: eventTs || curBilling.lastEventTs || 0,
+        lastNotifiedSubId: shouldSendEmail
+          ? state.billing?.subscriptionId
+          : curBilling.lastNotifiedSubId || null,
+      },
     };
     next.ent = entitlementsFor({ ...cur, ...next }, now());
     tx.set(userRef, next, { merge: true });
-    return "applied";
+    return shouldSendEmail ? "applied_notify" : "applied";
   });
 
-  if (result === "applied" && state.planStatus === "active" && recipientEmail) {
+  if ((result === "applied_notify" || result === "applied") && result === "applied_notify" && recipientEmail) {
     sendSubscriptionSuccessEmail({
       toEmail: recipientEmail,
       customerName: recipientName,
@@ -64,7 +76,7 @@ export async function applyState({ db, uid, state, eventKey, eventTs, now = () =
     }).catch((e) => console.warn("[Email Notification] Async dispatch warning:", e.message));
   }
 
-  return result;
+  return result.startsWith("applied") ? "applied" : result;
 }
 
 /** Find the uid for a Stripe customer when an event carries no metadata. */

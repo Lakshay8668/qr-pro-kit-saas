@@ -240,17 +240,35 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       // ------------------------------------------------------------- POST: bulk quantity
       if (req.method === "POST" && action === "bulk-quantity") {
         locked(ent, "bulk", "Bulk creation");
-        const qty = parseInt(body.quantity, 10);
-        if (!Number.isInteger(qty) || qty < 10 || qty > 1000) {
-          throw new Fail(400, "bad_request", "Quantity must be an integer between 10 and 1,000.");
+
+        // Parse and validate quantity range inputs
+        let minQty = body.minQuantity !== undefined ? parseInt(body.minQuantity, 10) : 10;
+        let maxQty = body.maxQuantity !== undefined ? parseInt(body.maxQuantity, 10) : 1000;
+        let qty = body.quantity !== undefined ? parseInt(body.quantity, 10) : minQty;
+
+        if (!Number.isInteger(minQty) || minQty < 10 || minQty > 1000) {
+          throw new Fail(400, "bad_request", "Minimum quantity must be an integer between 10 and 1,000.");
         }
+        if (!Number.isInteger(maxQty) || maxQty < 10 || maxQty > 1000) {
+          throw new Fail(400, "bad_request", "Maximum quantity must be an integer between 10 and 1,000.");
+        }
+        if (minQty > maxQty) {
+          throw new Fail(400, "bad_request", `Minimum quantity (${minQty}) cannot be greater than maximum quantity (${maxQty}).`);
+        }
+        if (!Number.isInteger(qty) || qty < minQty || qty > maxQty) {
+          throw new Fail(400, "bad_request", `Requested generation quantity (${qty}) must be between 10 and 1,000 (specified range: ${minQty} to ${maxQty}).`);
+        }
+
         const used = await countLinks(db, me.uid);
         if (!isAdmin && used.dynamicQrs + qty > ent.dynamicQrs) {
           const left = Math.max(0, ent.dynamicQrs - used.dynamicQrs);
           throw limitFail(ent, "dynamicQrs", used.dynamicQrs, ` Generating ${qty} QR codes exceeds your remaining allowance of ${left}.`);
         }
-        const baseLabel = String(body.labelPrefix || body.prefix || "Batch QR").trim().slice(0, 50) || "Batch QR";
-        const defaultDest = isHttpUrl(body.defaultDestination) ? body.defaultDestination.trim() : "https://qr-pro-kit-saas-production.up.railway.app/draft";
+
+        const defaultDest = isHttpUrl(body.defaultDestination)
+          ? body.defaultDestination.trim()
+          : "https://qr-pro-kit-saas-production.up.railway.app/draft";
+        const baseLabel = String(body.labelPrefix || body.prefix || "QR").trim().slice(0, 50) || "QR";
         const cleanDes = cleanDesign(body.design);
         const docs = [];
         for (let i = 1; i <= qty; i++) {
@@ -273,7 +291,12 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
             createdAt: serverTs(),
           });
         }
-        return json(res, 200, { ids: await writeMany(db, docs), quantity: qty });
+        return json(res, 200, {
+          ids: await writeMany(db, docs),
+          quantity: qty,
+          minQuantity: minQty,
+          maxQuantity: maxQty,
+        });
       }
 
       // ------------------------------------------------------------- POST: update link

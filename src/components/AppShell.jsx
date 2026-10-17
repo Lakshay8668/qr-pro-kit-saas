@@ -81,13 +81,13 @@ export default function AppShell({
       {/* Left Sidebar */}
       <aside className={`bitly-sidebar ${mobileMenuOpen ? "open" : ""}`}>
         <div className="sidebar-brand-box">
-          <Link to="/dashboard" className="sidebar-brand">
-            <div className="brand-icon-box">
-              <span className="brand-qr-sym">QR</span>
-            </div>
-            <div className="brand-text">
-              QR<span>Pro</span> <span className="brand-subtag">Kit</span>
-            </div>
+          <Link to="/dashboard" className="sidebar-brand" style={{ display: "flex", alignItems: "center", textDecoration: "none" }}>
+            <img
+              src="/typqr-logo.png"
+              alt="TypQR"
+              className="sidebar-brand-img"
+              style={{ height: "36px", width: "auto", maxWidth: "160px", display: "block", objectFit: "contain" }}
+            />
           </Link>
           <button
             type="button"
