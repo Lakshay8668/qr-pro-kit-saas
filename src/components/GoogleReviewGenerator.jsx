@@ -35,28 +35,38 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
 
     try {
       const res = await resolveGoogleReviewLink(raw);
-      if (res.ok && res.reviewUrl) {
+      if (res.ok && (res.reviewUrl || res.review_url)) {
+        const placeId = res.placeId || res.place_id;
+        const reviewUrl = res.reviewUrl || res.review_url;
         setData({
           ...data,
           inputUrl: raw,
-          placeId: res.placeId,
-          reviewUrl: res.reviewUrl,
-          resolvedUrl: res.resolvedUrl || null,
+          placeId,
+          reviewUrl,
+          resolvedUrl: res.resolvedUrl || res.resolved_url || null,
         });
         setError("");
         setManualFallback(false);
       } else {
-        setError(
-          res.error ||
-            "Could not automatically extract the Google Place ID from this link. You can paste your official review link or Place ID directly."
-        );
+        const msg = res.error || "Could not automatically resolve the Google Place ID from this link. You can paste your official Google review link or Place ID directly.";
+        setError(msg);
         setManualFallback(true);
       }
     } catch (err) {
-      setError(
-        err?.message ||
-          "Network error while resolving Google Maps link. Please try again or paste your official review link directly."
-      );
+      const serverData = err.data || {};
+      let msg = serverData.error || err?.message;
+      if (serverData.code === "unsupported_url") {
+        msg = "Unsupported URL: Please use a Share link from Google Maps (maps.app.goo.gl, share.google) or a full Google Maps place link.";
+      } else if (serverData.code === "unsafe_redirect") {
+        msg = "Security notice: This link redirected to an unapproved or private network destination.";
+      } else if (serverData.code === "upstream_timeout") {
+        msg = "Resolution timed out: The Google Maps short link took too long to respond. Please try again or paste the full Google Maps URL directly.";
+      } else if (serverData.code === "place_id_not_found") {
+        msg = "Place ID not found: Could not identify a specific business location in this link. Please select a specific business on Google Maps, or paste your review link directly.";
+      } else if (!msg || msg === "Request failed") {
+        msg = "Could not resolve Google Review link. Please try again or paste your review link directly.";
+      }
+      setError(msg);
       setManualFallback(true);
     } finally {
       setResolving(false);

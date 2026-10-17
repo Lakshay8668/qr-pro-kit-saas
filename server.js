@@ -261,7 +261,7 @@ const server = http.createServer(async (req, res) => {
       const handlers = await getHandlers();
       if (pathname === "/api/billing") return await handlers.billing(req, res);
       if (pathname === "/api/links") return await handlers.links(req, res);
-      if (pathname === "/api/google-review") {
+      if (pathname === "/api/google-review" || pathname === "/api/v1/google-review-link") {
         req.query.action = "resolve-google-review";
         return await handlers.links(req, res);
       }

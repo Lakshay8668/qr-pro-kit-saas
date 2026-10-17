@@ -60,7 +60,8 @@ export const dynamicUrlFor = (linkOrId) => shortUrlFor(linkOrId);
 export async function resolveGoogleReviewLink(inputUrl) {
   return await api("/api/links?action=resolve-google-review", {
     method: "POST",
-    body: { url: inputUrl },
+    body: { url: inputUrl, maps_url: inputUrl },
+    signedIn: false,
   });
 }
 

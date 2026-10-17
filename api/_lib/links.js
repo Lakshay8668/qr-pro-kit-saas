@@ -190,12 +190,16 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
       // ------------------------------------------------------------- PUBLIC: resolve Google Review URL
       if (action === "resolve-google-review") {
         const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
-        const urlToResolve = body.url || body.input || req.query?.url || "";
+        const urlToResolve = body.maps_url || body.url || body.input || req.query?.url || "";
         const result = await resolveGoogleMapsUrl(urlToResolve);
-        if (!result.ok) {
-          return json(res, 400, result);
-        }
-        return json(res, 200, result);
+        const statusCode = result.ok
+          ? 200
+          : result.code === "invalid_request"
+          ? 400
+          : result.code === "upstream_timeout"
+          ? 504
+          : 422;
+        return json(res, statusCode, result);
       }
 
       if (req.method === "GET") {

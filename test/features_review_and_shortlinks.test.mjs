@@ -7,8 +7,16 @@ import assert from "node:assert/strict";
 import { makeDb, callJson } from "./fakeDb.mjs";
 import { createLinksHandler, getPublicBaseUrl } from "../api/_lib/links.js";
 import { createHandler } from "../api/_lib/handler.js";
-import { resolveGoogleMapsUrl, extractPlaceIdFromUrl, isValidPlaceId, buildGoogleReviewUrl } from "../api/_lib/googleReview.js";
-import { buildPayload, getDynamicDestinations } from "../src/lib/qrPayloads.js";
+import {
+  resolveGoogleMapsUrl,
+  extractPlaceIdFromUrl,
+  isValidPlaceId,
+  buildGoogleReviewUrl,
+  hexToPlaceId,
+  isPrivateIp,
+  isApprovedGoogleDomain,
+} from "../api/_lib/googleReview.js";
+import { buildPayload } from "../src/lib/qrPayloads.js";
 import { shortUrlFor, dynamicUrlFor } from "../src/lib/links.js";
 
 console.log("\n=== RUNNING FEATURE 1 & FEATURE 2 VERIFICATION SUITE ===\n");
@@ -27,6 +35,7 @@ console.log("--- Testing Feature 1: Google Review Link Generator ---");
 // 1.1 Place ID Validation
 assert.equal(isValidPlaceId("ChIJN1t_tDeuEmsRUsoyG83frY4"), true);
 assert.equal(isValidPlaceId("GhIJN1t_tDeuEmsRUsoyG83frY4"), true);
+assert.equal(isValidPlaceId("ChIJq3uGrhyPsUcRoqE7daOz-LY"), true);
 assert.equal(isValidPlaceId("not-a-place-id"), false);
 assert.equal(isValidPlaceId("https://google.com"), false);
 assert.equal(isValidPlaceId(""), false);
@@ -38,11 +47,23 @@ const canonicalReview = buildGoogleReviewUrl(placeId1);
 assert.equal(canonicalReview, `https://search.google.com/local/writereview?placeid=${placeId1}`);
 ok("buildGoogleReviewUrl generates canonical write-review link format");
 
-// 1.3 Place ID Extraction from various Google Maps formats
+// 1.3 Hex Feature ID to Place ID Conversion (Mathematical Protobuf Mapping)
+// Real-world sample from ProductMate:
+// https://www.google.com/maps/place/PRODUCTMATE/data=!1s0x47b18f1cae867bab:0xb6f8b3a3753ba1a2!8m2
+const productMatePlaceId = hexToPlaceId("0x47b18f1cae867bab", "0xb6f8b3a3753ba1a2");
+assert.equal(productMatePlaceId, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+ok("hexToPlaceId converts Google feature ID hex pairs (0x...:0x...) into verified Place ID");
+
+// Second sample: Sydney Opera House (0x6b12ae665e892fdd:0x9bb1ec898169c451)
+const operaHousePlaceId = hexToPlaceId("0x6b12ae665e892fdd", "0x9bb1ec898169c451");
+assert.equal(operaHousePlaceId, "ChIJ3S-JXmauEmsRUcRpgYnssZs");
+ok("hexToPlaceId verified against Sydney Opera House feature ID");
+
+// 1.4 Place ID Extraction from various Google Maps formats
 // Format A: Direct Place ID
 assert.equal(extractPlaceIdFromUrl(placeId1), placeId1);
 
-// Format B: placeid query parameter
+// Format B: placeid / place_id query parameter
 assert.equal(
   extractPlaceIdFromUrl("https://search.google.com/local/writereview?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4"),
   placeId1
@@ -58,76 +79,177 @@ assert.equal(
   placeId1
 );
 
-// Format D: data=!1sChIJ... parameter
-assert.equal(
-  extractPlaceIdFromUrl("https://www.google.com/maps/place/Business+Name/@28.61,77.20,17z/data=!4m6!3m5!1sChIJN1t_tDeuEmsRUsoyG83frY4!8m2!3d28.61!4d77.20"),
-  placeId1
-);
-ok("extractPlaceIdFromUrl extracts Place IDs across all supported Google Maps link structures");
+// Format D: Full Google Maps URL with !1s0x...:0x... feature ID
+const fullMapsUrl =
+  "https://www.google.com/maps/place/PRODUCTMATE/data=!1s0x47b18f1cae867bab:0xb6f8b3a3753ba1a2!8m2!3d52.52!4d13.40";
+assert.equal(extractPlaceIdFromUrl(fullMapsUrl), "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+ok("extractPlaceIdFromUrl extracts Place IDs from full Google Maps place URLs containing !1s0x...:0x...");
 
-// 1.4 Mock redirect resolution for short links (maps.app.goo.gl, share.google)
+// Format E: Google redirect URL unwrapping (?q=https://...)
+const redirectTrampoline =
+  "https://www.google.com/url?q=https://www.google.com/maps/place/PRODUCTMATE/data=!1s0x47b18f1cae867bab:0xb6f8b3a3753ba1a2!8m2";
+assert.equal(extractPlaceIdFromUrl(redirectTrampoline), "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+ok("extractPlaceIdFromUrl unwraps Google redirect trampolines");
+
+// 1.5 Short Link Resolution with Network Mock
+const safeDnsLookup = async (hostname) => {
+  return { address: "142.250.190.46", family: 4 }; // Public Google IP
+};
+
 const mockFetchShortLink = async (url) => {
+  // A: maps.app.goo.gl short URL
   if (url === "https://maps.app.goo.gl/sampleShort123") {
     return {
       status: 302,
       headers: new Headers({
-        location: "https://www.google.com/maps/place/Cafe/@28.61,77.20/data=!4m6!3m5!1sChIJN1t_tDeuEmsRUsoyG83frY4!8m2!3d28.61",
+        location: fullMapsUrl,
       }),
     };
   }
+  // B: share.google short URL
   if (url === "https://share.google/bizShort456") {
     return {
       status: 301,
       headers: new Headers({
-        location: "https://maps.google.com/?placeid=ChIJN1t_tDeuEmsRUsoyG83frY4",
+        location: "https://www.google.com/maps/place/Sydney+Opera+House/data=!1s0x6b12ae665e892fdd:0x9bb1ec898169c451",
+      }),
+    };
+  }
+  // C: legacy goo.gl/maps short URL
+  if (url === "https://goo.gl/maps/legacy789") {
+    return {
+      status: 301,
+      headers: new Headers({
+        location: fullMapsUrl,
+      }),
+    };
+  }
+  // D: Unapproved domain redirect
+  if (url === "https://maps.app.goo.gl/evilRedirect") {
+    return {
+      status: 302,
+      headers: new Headers({
+        location: "https://attacker.com/steal-creds",
+      }),
+    };
+  }
+  // E: Private IP redirect
+  if (url === "https://maps.app.goo.gl/privateIpRedirect") {
+    return {
+      status: 302,
+      headers: new Headers({
+        location: "https://internal-service.google.com/admin",
       }),
     };
   }
   return { status: 404, headers: new Headers() };
 };
 
-const shortLinkRes = await resolveGoogleMapsUrl("https://maps.app.goo.gl/sampleShort123", mockFetchShortLink);
+// Test maps.app.goo.gl
+const shortLinkRes = await resolveGoogleMapsUrl("https://maps.app.goo.gl/sampleShort123", {
+  fetchImpl: mockFetchShortLink,
+  dnsLookupImpl: safeDnsLookup,
+});
 assert.equal(shortLinkRes.ok, true);
-assert.equal(shortLinkRes.placeId, placeId1);
-assert.equal(shortLinkRes.reviewUrl, canonicalReview);
-ok("resolveGoogleMapsUrl follows short link redirects and extracts Place ID");
+assert.equal(shortLinkRes.placeId, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+assert.equal(shortLinkRes.place_id, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+assert.equal(shortLinkRes.verification, "not_verified");
+ok("resolveGoogleMapsUrl follows maps.app.goo.gl redirect and extracts Place ID");
 
-const shareGoogleRes = await resolveGoogleMapsUrl("https://share.google/bizShort456", mockFetchShortLink);
+// Test share.google
+const shareGoogleRes = await resolveGoogleMapsUrl("https://share.google/bizShort456", {
+  fetchImpl: mockFetchShortLink,
+  dnsLookupImpl: safeDnsLookup,
+});
 assert.equal(shareGoogleRes.ok, true);
-assert.equal(shareGoogleRes.placeId, placeId1);
-assert.equal(shareGoogleRes.reviewUrl, canonicalReview);
-ok("resolveGoogleMapsUrl resolves share.google short links safely");
+assert.equal(shareGoogleRes.placeId, "ChIJ3S-JXmauEmsRUcRpgYnssZs");
+ok("resolveGoogleMapsUrl follows share.google redirect and extracts Place ID");
 
-// 1.5 SSRF and domain restrictions
+// Test legacy goo.gl/maps
+const legacyGooglRes = await resolveGoogleMapsUrl("https://goo.gl/maps/legacy789", {
+  fetchImpl: mockFetchShortLink,
+  dnsLookupImpl: safeDnsLookup,
+});
+assert.equal(legacyGooglRes.ok, true);
+assert.equal(legacyGooglRes.placeId, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+ok("resolveGoogleMapsUrl resolves legacy goo.gl/maps links safely");
+
+// 1.6 SSRF Security Checks
+// A: Initial unapproved domain -> unsupported_url
 const nonGoogleRes = await resolveGoogleMapsUrl("https://attacker.com/evil-redirect");
 assert.equal(nonGoogleRes.ok, false);
-assert.ok(nonGoogleRes.error.includes("official Google Maps"));
-ok("SSRF guard strictly rejects non-Google domains");
+assert.equal(nonGoogleRes.code, "unsupported_url");
+ok("Initial non-Google domain returns code: unsupported_url");
 
-// 1.6 Unresolvable links return actionable error for manual fallback
-const mockUnresolvableFetch = async () => ({
-  status: 200,
-  url: "https://www.google.com/maps",
-  headers: new Headers(),
-  text: async () => "<html><body>No Place ID here</body></html>",
+// B: Redirect to an unapproved domain -> unsafe_redirect
+const unapprovedRedirectRes = await resolveGoogleMapsUrl("https://maps.app.goo.gl/evilRedirect", {
+  fetchImpl: mockFetchShortLink,
+  dnsLookupImpl: safeDnsLookup,
 });
-const unresolvableRes = await resolveGoogleMapsUrl("https://maps.google.com/unresolvable", mockUnresolvableFetch);
-assert.equal(unresolvableRes.ok, false);
-assert.ok(unresolvableRes.error.includes("Could not automatically resolve"));
-ok("Unresolvable link returns actionable error advising manual input fallback");
+assert.equal(unapprovedRedirectRes.ok, false);
+assert.equal(unapprovedRedirectRes.code, "unsafe_redirect");
+ok("Redirect to an unapproved domain is blocked with code: unsafe_redirect");
 
-// 1.7 QR Payload builder for review type
+// C: Redirect resolving to a private/internal IP (127.0.0.1, 169.254.169.254, 10.x, 192.168.x) -> unsafe_redirect
+const privateDnsLookup = async () => ({ address: "169.254.169.254", family: 4 });
+const privateIpRes = await resolveGoogleMapsUrl("https://maps.app.goo.gl/privateIpRedirect", {
+  fetchImpl: mockFetchShortLink,
+  dnsLookupImpl: privateDnsLookup,
+});
+assert.equal(privateIpRes.ok, false);
+assert.equal(privateIpRes.code, "unsafe_redirect");
+ok("Redirect resolving to internal/cloud metadata IP (169.254.169.254) is blocked with code: unsafe_redirect");
+
+// D: Private IP helper unit tests
+assert.equal(isPrivateIp("127.0.0.1"), true);
+assert.equal(isPrivateIp("192.168.1.100"), true);
+assert.equal(isPrivateIp("10.0.0.1"), true);
+assert.equal(isPrivateIp("172.16.0.1"), true);
+assert.equal(isPrivateIp("::1"), true);
+assert.equal(isPrivateIp("142.250.190.46"), false);
+ok("isPrivateIp rejects loopback, RFC1918, link-local and allows public routable IPs");
+
+// 1.7 Timeout Handling -> upstream_timeout
+const timeoutFetch = async () => {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  throw err;
+};
+const timeoutRes = await resolveGoogleMapsUrl("https://maps.app.goo.gl/sampleShort123", {
+  fetchImpl: timeoutFetch,
+  dnsLookupImpl: safeDnsLookup,
+  timeoutMs: 100,
+});
+assert.equal(timeoutRes.ok, false);
+assert.equal(timeoutRes.code, "upstream_timeout");
+ok("Resolution timeout returns code: upstream_timeout");
+
+// 1.8 Google Maps URL with no extractable Place ID -> place_id_not_found
+const noPlaceIdFetch = async () => ({
+  status: 200,
+  url: "https://www.google.com/maps/@28.6139,77.2090,12z", // Generic map view, no business
+  headers: new Headers(),
+});
+const noPlaceRes = await resolveGoogleMapsUrl("https://www.google.com/maps/@28.6139,77.2090,12z", {
+  fetchImpl: noPlaceIdFetch,
+  dnsLookupImpl: safeDnsLookup,
+});
+assert.equal(noPlaceRes.ok, false);
+assert.equal(noPlaceRes.code, "place_id_not_found");
+ok("Google Maps link with no specific place identifier returns code: place_id_not_found");
+
+// 1.9 QR Payload builder for review type (manual fallback & auto)
 const payloadWithPlaceId = buildPayload("review", { placeId: placeId1 });
 assert.equal(payloadWithPlaceId, canonicalReview);
 
 const payloadWithReviewUrl = buildPayload("review", { reviewUrl: canonicalReview });
 assert.equal(payloadWithReviewUrl, canonicalReview);
 
-const payloadWithRawPastedUrl = buildPayload("review", { placeId: "https://g.page/r/sample/review" });
-assert.equal(payloadWithRawPastedUrl, "https://g.page/r/sample/review");
-ok("buildPayload('review') accurately encodes canonical Google review URL or official direct link");
+const payloadWithManualLink = buildPayload("review", { placeId: "https://g.page/r/sample/review" });
+assert.equal(payloadWithManualLink, "https://g.page/r/sample/review");
+ok("buildPayload('review') encodes canonical review URL, direct reviewUrl, or official manual link");
 
-// 1.8 Public API endpoint (no auth required)
+// 1.10 Public API Endpoint (No Authentication Required)
 const fakeDbInstance = makeDb();
 const linksHandler = createLinksHandler({
   getDb: () => fakeDbInstance,
@@ -137,17 +259,27 @@ const linksHandler = createLinksHandler({
   adminUids: ["admin1"],
 });
 
-// Call resolve-google-review publicly (WITHOUT auth header)
+// Test POST /api/links?action=resolve-google-review (with maps_url param matching ProductMate)
 let apiReviewRes = await callJson(linksHandler, {
   method: "POST",
   query: { action: "resolve-google-review" },
-  body: { url: placeId1 },
+  body: { maps_url: fullMapsUrl },
 });
 assert.equal(apiReviewRes.code, 200);
 assert.equal(apiReviewRes.body.ok, true);
-assert.equal(apiReviewRes.body.placeId, placeId1);
-assert.equal(apiReviewRes.body.reviewUrl, canonicalReview);
-ok("POST /api/links?action=resolve-google-review works publicly without authentication");
+assert.equal(apiReviewRes.body.place_id, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+assert.equal(apiReviewRes.body.review_url, "https://search.google.com/local/writereview?placeid=ChIJq3uGrhyPsUcRoqE7daOz-LY");
+ok("POST /api/links?action=resolve-google-review resolves full maps_url publicly without authentication");
+
+// Test Real-World Business URL Integration:
+// Google Maps place URL for Eiffel Tower:
+const eiffelTowerMapsUrl =
+  "https://www.google.com/maps/place/Eiffel+Tower/data=!1s0x47e66e2964e34e2d:0x8ddca9ee380ef7e0";
+const eiffelPlaceId = extractPlaceIdFromUrl(eiffelTowerMapsUrl);
+assert.equal(eiffelPlaceId, "ChIJLU7jZClu5kcR4PcOOO6p3I0");
+const eiffelReviewUrl = buildGoogleReviewUrl(eiffelPlaceId);
+assert.equal(eiffelReviewUrl, "https://search.google.com/local/writereview?placeid=ChIJLU7jZClu5kcR4PcOOO6p3I0");
+ok("Real-world business (Eiffel Tower) correctly resolves to Place ID ChIJLU7jZClu5kcR4PcOOO6p3I0");
 
 
 // =========================================================================
@@ -163,10 +295,6 @@ const db = makeDb({
     cust_101: { uid: "cust_101", plan: "pro" },
   },
 });
-
-let generatedSlugs = ["dupSlug1", "dupSlug1", "uniqueSlug2"];
-let slugIndex = 0;
-const mockSlugGenerator = () => generatedSlugs[slugIndex++];
 
 const linksApi = createLinksHandler({
   getDb: () => db,
@@ -266,7 +394,6 @@ assert.equal(retryRes.body.slug, "resolvedClean456");
 ok("Slug collision detected and resolved cleanly via automatic retry");
 
 // 2.6 /r/:slug Redirect Handler Execution
-let scansLogged = [];
 const redirectHandler = createHandler({
   getDb: () => db,
   secret: () => "test-cookie-secret",
@@ -376,8 +503,6 @@ assert.equal(staticDoc.kind, "static");
 assert.equal(staticDoc.payload, "WIFI:T:WPA;S:CoffeeShop;P:Secret123;;");
 assert.equal(staticDoc.shortUrl, null);
 
-// Direct encoding check:
-assert.equal(staticDoc.payload, "WIFI:T:WPA;S:CoffeeShop;P:Secret123;;");
 // Ensure static QRs cannot be redirected through /r/:slug
 const staticRedir = await callRedirect("/r", staticId);
 assert.equal(staticRedir.statusCode, 404);
