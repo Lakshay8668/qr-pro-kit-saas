@@ -89,26 +89,55 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
     setManualValue(clean);
     if (!clean) return;
 
-    let reviewUrl = clean;
-    let placeId = clean;
     if (!clean.startsWith("http")) {
       // Looks like a Place ID
-      reviewUrl = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(clean)}`;
-      placeId = clean;
-    } else {
-      // Direct URL pasted
-      reviewUrl = clean;
-      const match = clean.match(/placeid=([A-Za-z0-9_-]{20,})/i);
-      if (match) placeId = match[1];
+      if (!/^[A-Za-z0-9_-]{20,80}$/.test(clean)) {
+        setError("Please enter a valid Google Place ID (e.g. ChIJ...) or official Google review link.");
+        return;
+      }
+      const reviewUrl = `https://search.google.com/local/writereview?placeid=${encodeURIComponent(clean)}`;
+      setData({
+        ...data,
+        inputUrl: clean,
+        placeId: clean,
+        reviewUrl,
+      });
+      setError("");
+      return;
     }
 
-    setData({
-      ...data,
-      inputUrl: clean,
-      placeId,
-      reviewUrl,
-    });
-    setError("");
+    // Direct URL pasted: validate destination
+    try {
+      const parsed = new URL(clean);
+      const host = parsed.hostname.toLowerCase();
+      const isApproved =
+        host === "search.google.com" ||
+        host === "maps.google.com" ||
+        host === "google.com" ||
+        host.endsWith(".google.com") ||
+        host === "g.page" ||
+        host.endsWith(".g.page") ||
+        /^(?:[a-z0-9-]+\.)*google\.(?:[a-z]{2,4}|co\.[a-z]{2}|com\.[a-z]{2})$/i.test(host);
+
+      if (!isApproved) {
+        setError("Invalid review link: Destination must be an official Google domain (search.google.com or g.page).");
+        return;
+      }
+
+      let placeId = clean;
+      const match = clean.match(/(?:placeid|place_id|query_place_id)=([A-Za-z0-9_-]{20,})/i);
+      if (match) placeId = match[1];
+
+      setData({
+        ...data,
+        inputUrl: clean,
+        placeId,
+        reviewUrl: clean,
+      });
+      setError("");
+    } catch {
+      setError("Please paste a valid URL or Place ID.");
+    }
   };
 
   const handleReset = () => {

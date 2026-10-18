@@ -15,6 +15,10 @@ import {
   hexToPlaceId,
   isPrivateIp,
   isApprovedGoogleDomain,
+  validateOfficialReviewUrl,
+  extractMapsMetadata,
+  lookupGooglePlacesApi,
+  safeDecodeUrl,
 } from "../api/_lib/googleReview.js";
 import { buildPayload } from "../src/lib/qrPayloads.js";
 import { shortUrlFor, dynamicUrlFor } from "../src/lib/links.js";
@@ -280,6 +284,137 @@ assert.equal(eiffelPlaceId, "ChIJLU7jZClu5kcR4PcOOO6p3I0");
 const eiffelReviewUrl = buildGoogleReviewUrl(eiffelPlaceId);
 assert.equal(eiffelReviewUrl, "https://search.google.com/local/writereview?placeid=ChIJLU7jZClu5kcR4PcOOO6p3I0");
 ok("Real-world business (Eiffel Tower) correctly resolves to Place ID ChIJLU7jZClu5kcR4PcOOO6p3I0");
+
+// Real-world business URL for Sydney Opera House:
+const sydneyOperaMapsUrl =
+  "https://www.google.com/maps/place/Sydney+Opera+House/@-33.8567844,151.2152967,17z/data=!4m6!3m5!1s0x6b12ae665e892fdd:0x3133f8d75a1ac251!8m2!3d-33.8567844!4d151.2152967!16zL20vMDZfbm0";
+const sydneyPlaceId = extractPlaceIdFromUrl(sydneyOperaMapsUrl);
+assert.equal(sydneyPlaceId, "ChIJ3S-JXmauEmsRUcIaWtf4MzE");
+const sydneyReviewUrl = buildGoogleReviewUrl(sydneyPlaceId);
+assert.equal(sydneyReviewUrl, "https://search.google.com/local/writereview?placeid=ChIJ3S-JXmauEmsRUcIaWtf4MzE");
+ok("Real-world business (Sydney Opera House) correctly resolves to Place ID ChIJ3S-JXmauEmsRUcIaWtf4MzE");
+
+// 1.11 Regression Test: query_place_id parameter format
+const queryPlaceIdUrl = "https://www.google.com/maps/search/?api=1&query=Centennial+Park&query_place_id=ChIJ5xL0AeqxEmsRkQ4qI_6fW6I";
+const extractedQueryPlaceId = extractPlaceIdFromUrl(queryPlaceIdUrl);
+assert.equal(extractedQueryPlaceId, "ChIJ5xL0AeqxEmsRkQ4qI_6fW6I");
+ok("extractPlaceIdFromUrl extracts Place ID from query_place_id parameter");
+
+// 1.12 Regression Test: q=place_id: format
+const qPlaceIdUrl = "https://maps.google.com/?q=place_id:ChIJq3uGrhyPsUcRoqE7daOz-LY";
+const extractedQPlaceId = extractPlaceIdFromUrl(qPlaceIdUrl);
+assert.equal(extractedQPlaceId, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+ok("extractPlaceIdFromUrl extracts Place ID from q=place_id: format");
+
+// 1.13 Regression Test: Place ID directly in /maps/place/ path
+const pathPlaceIdUrl = "https://www.google.com/maps/place/ChIJLU7jZClu5kcR4PcOOO6p3I0/@48.8583701,2.2944813,17z";
+const extractedPathPlaceId = extractPlaceIdFromUrl(pathPlaceIdUrl);
+assert.equal(extractedPathPlaceId, "ChIJLU7jZClu5kcR4PcOOO6p3I0");
+ok("extractPlaceIdFromUrl extracts Place ID directly from /maps/place/ path");
+
+// 1.14 Regression Test: URL-encoded data parameter (%211s0x...%3A0x...)
+const encodedDataUrl = "https://www.google.com/maps/place/Eiffel+Tower/data=%211s0x47e66e2964e34e2d%3A0x8ddca9ee380ef7e0";
+const extractedEncodedPlaceId = extractPlaceIdFromUrl(encodedDataUrl);
+assert.equal(extractedEncodedPlaceId, "ChIJLU7jZClu5kcR4PcOOO6p3I0");
+ok("extractPlaceIdFromUrl decodes URL-encoded data parameter (%211s...%3A...) and derives Place ID");
+
+// 1.15 Regression Test: Missing Place ID (business name only, no place id or hex pair)
+// Must NEVER fabricate a Place ID or report unverified place as verified
+const nameOnlyUrl = "https://www.google.com/maps/place/The+Coffee+Shop/@40.7128,-74.0060,15z";
+const metaFromName = extractMapsMetadata(nameOnlyUrl);
+assert.equal(metaFromName.businessName, "The Coffee Shop");
+assert.equal(metaFromName.coordinates.lat, 40.7128);
+const nameOnlyRes = await resolveGoogleMapsUrl(nameOnlyUrl, {
+  dnsLookupImpl: safeDnsLookup,
+});
+assert.equal(nameOnlyRes.ok, false);
+assert.equal(nameOnlyRes.code, "place_id_not_found");
+assert.equal(nameOnlyRes.diagnostics.businessName, "The Coffee Shop");
+ok("URL with only a business name returns place_id_not_found without fabricating a Place ID");
+
+// 1.16 Regression Test: CID only URL (CID is not automatically a Place ID)
+const cidOnlyUrl = "https://maps.google.com/?cid=10222452814328887264";
+const metaFromCid = extractMapsMetadata(cidOnlyUrl);
+assert.equal(metaFromCid.cid, "10222452814328887264");
+const cidOnlyRes = await resolveGoogleMapsUrl(cidOnlyUrl, {
+  dnsLookupImpl: safeDnsLookup,
+});
+assert.equal(cidOnlyRes.ok, false);
+assert.equal(cidOnlyRes.code, "place_id_not_found");
+assert.equal(cidOnlyRes.diagnostics.cid, "10222452814328887264");
+ok("URL with CID only returns place_id_not_found and does not treat CID as a Place ID");
+
+// 1.17 Regression Test: Optional Google Places API Lookup Fallback (Mock Success)
+const mockPlacesApiFetch = async (url) => {
+  return {
+    ok: true,
+    status: 200,
+    json: async () => ({
+      status: "OK",
+      candidates: [
+        {
+          place_id: "ChIJ3S-JXmauEmsRUcIaWtf4MzE",
+          name: "Sydney Opera House",
+          formatted_address: "Bennelong Point, Sydney NSW 2000, Australia",
+        },
+      ],
+    }),
+  };
+};
+const placesApiRes = await resolveGoogleMapsUrl("https://www.google.com/maps/place/Sydney+Opera+House/@-33.8567844,151.2152967,17z", {
+  dnsLookupImpl: safeDnsLookup,
+  placesApiKey: "mock_test_key_12345",
+  fetchImpl: mockPlacesApiFetch,
+});
+assert.equal(placesApiRes.ok, true);
+assert.equal(placesApiRes.place_id, "ChIJ3S-JXmauEmsRUcIaWtf4MzE");
+assert.equal(placesApiRes.source, "google_places_api");
+assert.equal(placesApiRes.review_url, "https://search.google.com/local/writereview?placeid=ChIJ3S-JXmauEmsRUcIaWtf4MzE");
+ok("Optional Google Places API lookup fallback resolves business name to verified Place ID");
+
+// 1.18 Regression Test: Google Places API Quota / Error Handling (Safe Handling)
+const mockPlacesQuotaFetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({
+    status: "OVER_QUERY_LIMIT",
+    error_message: "You have exceeded your request quota for this API.",
+  }),
+});
+const placesQuotaRes = await resolveGoogleMapsUrl("https://www.google.com/maps/place/Sydney+Opera+House/@-33.8567844,151.2152967,17z", {
+  dnsLookupImpl: safeDnsLookup,
+  placesApiKey: "mock_test_key_12345",
+  fetchImpl: mockPlacesQuotaFetch,
+});
+assert.equal(placesQuotaRes.ok, false);
+assert.equal(placesQuotaRes.code, "place_id_not_found");
+ok("Google Places API OVER_QUERY_LIMIT quota error handled gracefully without crash");
+
+// 1.19 Regression Test: Official Google Review URL Pasted Directly
+const officialWritereviewUrl = "https://search.google.com/local/writereview?placeid=ChIJq3uGrhyPsUcRoqE7daOz-LY";
+const directReviewRes = await resolveGoogleMapsUrl(officialWritereviewUrl);
+assert.equal(directReviewRes.ok, true);
+assert.equal(directReviewRes.place_id, "ChIJq3uGrhyPsUcRoqE7daOz-LY");
+assert.equal(directReviewRes.review_url, officialWritereviewUrl);
+ok("Official Google review URL pasted directly is validated and accepted immediately");
+
+// 1.20 Regression Test: Official Google Review Short Link (g.page/r/.../review)
+const gPageReviewUrl = "https://g.page/r/CbW7uL-Y5_3vEAE/review";
+const gPageReviewCheck = validateOfficialReviewUrl(gPageReviewUrl);
+assert.equal(gPageReviewCheck.valid, true);
+assert.equal(gPageReviewCheck.type, "g_page_review");
+const gPageRes = await resolveGoogleMapsUrl(gPageReviewUrl, {
+  dnsLookupImpl: safeDnsLookup,
+});
+assert.equal(gPageRes.ok, true);
+assert.equal(gPageRes.source, "official_review_url");
+ok("Official Google review short URL (g.page/r/.../review) is validated and accepted");
+
+// 1.21 Regression Test: Unapproved review domain rejected
+const unapprovedReviewRes = await resolveGoogleMapsUrl("https://attacker.com/local/writereview?placeid=ChIJq3uGrhyPsUcRoqE7daOz-LY");
+assert.equal(unapprovedReviewRes.ok, false);
+assert.equal(unapprovedReviewRes.code, "unsupported_url");
+ok("Unapproved review URL domain is rejected with code unsupported_url");
 
 
 // =========================================================================
