@@ -182,6 +182,8 @@ export function extractMapsMetadata(rawUrl) {
 
   let businessName = null;
   let cid = null;
+  let kgmid = null;
+  let kgs = null;
   let coordinates = null;
 
   try {
@@ -193,6 +195,16 @@ export function extractMapsMetadata(rawUrl) {
       cid = qCid.trim();
     }
 
+    // Check kgmid (/g/...) and kgs in Google Knowledge Graph / Search URLs
+    const qKgmid = parsed.searchParams.get("kgmid");
+    if (qKgmid) {
+      kgmid = qKgmid.trim();
+    }
+    const qKgs = parsed.searchParams.get("kgs");
+    if (qKgs) {
+      kgs = qKgs.trim();
+    }
+
     // Check business name in /maps/place/<name>/ path
     const placeMatch = parsed.pathname.match(/\/maps\/place\/([^/@?]+)/i);
     if (placeMatch) {
@@ -200,6 +212,23 @@ export function extractMapsMetadata(rawUrl) {
       // Ensure the segment is NOT a Place ID or a hex pair
       if (!isValidPlaceId(segment) && !/^(?:0x)?[0-9a-fA-F]{10,16}:(?:0x)?[0-9a-fA-F]{10,16}$/.test(segment)) {
         businessName = segment;
+      }
+    }
+
+    // Check business name in query parameters (?q=... or ?query=...)
+    if (!businessName) {
+      const qVal = parsed.searchParams.get("q") || parsed.searchParams.get("query");
+      if (qVal) {
+        const cleanVal = decodeURIComponent(qVal.replace(/\+/g, " ")).trim();
+        if (
+          !isValidPlaceId(cleanVal) &&
+          !cleanVal.startsWith("place_id:") &&
+          !cleanVal.startsWith("0x") &&
+          !/^@?-?\d+\.\d+/.test(cleanVal) &&
+          cleanVal.length >= 2
+        ) {
+          businessName = cleanVal;
+        }
       }
     }
 
@@ -213,7 +242,7 @@ export function extractMapsMetadata(rawUrl) {
     }
   } catch {}
 
-  return { businessName, cid, coordinates };
+  return { businessName, cid, kgmid, kgs, coordinates };
 }
 
 /**
@@ -633,36 +662,26 @@ export async function resolveGoogleMapsUrl(inputUrl, options = {}) {
       let resp;
       try {
         resp = await fetchImpl(targetUrl, {
-          method: "HEAD",
+          method: "GET",
           redirect: "manual",
           signal: controller.signal,
           headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
           },
         });
-      } catch {
-        // If HEAD fails or is rejected, attempt GET with redirect: manual
-        try {
-          resp = await fetchImpl(targetUrl, {
-            method: "GET",
-            redirect: "manual",
-            signal: controller.signal,
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            },
-          });
-        } catch (getErr) {
-          clearTimeout(timer);
-          if (controller.signal.aborted) {
-            return {
-              ok: false,
-              code: "upstream_timeout",
-              error: "The Google Maps short link resolution timed out. Please try again or paste the full Google Maps URL.",
-              diagnostics: { hops, redirectChain, timeoutMs },
-            };
-          }
-          throw getErr;
+      } catch (getErr) {
+        clearTimeout(timer);
+        if (controller.signal.aborted) {
+          return {
+            ok: false,
+            code: "upstream_timeout",
+            error: "The Google Maps short link resolution timed out. Please try again or paste the full Google Maps URL.",
+            diagnostics: { hops, redirectChain, timeoutMs },
+          };
         }
+        throw getErr;
       } finally {
         clearTimeout(timer);
       }
@@ -748,7 +767,7 @@ export async function resolveGoogleMapsUrl(inputUrl, options = {}) {
     };
   }
 
-  // 8. Extract metadata (businessName, cid, coordinates) from resolved URL
+  // 8. Extract metadata (businessName, cid, coordinates, kgmid, kgs) from resolved URL
   const meta = extractMapsMetadata(targetUrl) || extractMapsMetadata(currentUrl);
 
   // 9. Optional Google Places API fallback (if configured)
@@ -789,7 +808,7 @@ export async function resolveGoogleMapsUrl(inputUrl, options = {}) {
 
   // 10. Could not identify a specific Place ID — return actionable diagnostics
   const reasonDiagnostic = meta?.businessName
-    ? `URL contains business name '${meta.businessName}', but no embedded Place ID. Use an official share link, paste your review link, or configure GOOGLE_PLACES_API_KEY.`
+    ? `URL resolved to Google Search for business '${meta.businessName}'${meta.kgmid ? ` (kgmid: ${meta.kgmid})` : ""}, but Google did not embed a Place ID in the URL. Configure server-side GOOGLE_PLACES_API_KEY for automated resolution, or paste the official Google review link directly.`
     : meta?.cid
     ? `URL contains CID '${meta.cid}', which is not a Place ID. Use an official share link, paste your review link, or configure GOOGLE_PLACES_API_KEY.`
     : "Could not identify a specific business location in this link.";
@@ -800,12 +819,15 @@ export async function resolveGoogleMapsUrl(inputUrl, options = {}) {
     error: "Could not automatically resolve the Google Place ID from this link. You can paste your official Google review link or Place ID directly.",
     resolved_url: targetUrl,
     resolvedUrl: targetUrl,
+    business_name: meta?.businessName || null,
     diagnostics: {
       hops,
       redirectChain,
       finalUrl: targetUrl,
       status: lastStatus,
       businessName: meta?.businessName || null,
+      kgmid: meta?.kgmid || null,
+      kgs: meta?.kgs || null,
       cid: meta?.cid || null,
       placesApiConfigured: Boolean(placesApiKey),
       reason: reasonDiagnostic,

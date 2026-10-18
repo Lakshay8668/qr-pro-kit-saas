@@ -416,6 +416,84 @@ assert.equal(unapprovedReviewRes.ok, false);
 assert.equal(unapprovedReviewRes.code, "unsupported_url");
 ok("Unapproved review URL domain is rejected with code unsupported_url");
 
+// 1.22 Regression Test: Controlled redirect fixture reproducing share.google multi-hop behavior
+const mockShareGoogleFetch = async (url) => {
+  if (url === "https://share.google/controlledTest123") {
+    return {
+      status: 302,
+      headers: new Headers({ location: "https://www.google.com/share.google?q=controlledTest123" }),
+    };
+  }
+  if (url === "https://www.google.com/share.google?q=controlledTest123") {
+    return {
+      status: 301,
+      headers: new Headers({
+        location: "https://www.google.com/search?kgmid=/g/11xt4mq0gn&q=Dynamic+Test+Business&kgs=e7811dbdf658aff3",
+      }),
+    };
+  }
+  if (url.startsWith("https://www.google.com/search?")) {
+    return {
+      status: 200,
+      headers: new Headers(),
+    };
+  }
+  if (url.includes("maps.googleapis.com")) {
+    const urlObj = new URL(url);
+    const inputQuery = urlObj.searchParams.get("input");
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        status: "OK",
+        candidates: [
+          {
+            place_id: "ChIJ_dynamic_verified_place_id",
+            name: inputQuery,
+            formatted_address: "123 Business Way, Test City",
+          },
+        ],
+      }),
+    };
+  }
+  throw new Error(`Unexpected fetch URL in test: ${url}`);
+};
+
+// Test A: Without Places API key configured (default)
+const controlledResWithoutKey = await resolveGoogleMapsUrl("https://share.google/controlledTest123", {
+  dnsLookupImpl: safeDnsLookup,
+  fetchImpl: mockShareGoogleFetch,
+});
+assert.equal(controlledResWithoutKey.ok, false);
+assert.equal(controlledResWithoutKey.code, "place_id_not_found");
+assert.equal(controlledResWithoutKey.business_name, "Dynamic Test Business");
+assert.equal(controlledResWithoutKey.diagnostics.kgmid, "/g/11xt4mq0gn");
+assert.equal(controlledResWithoutKey.diagnostics.kgs, "e7811dbdf658aff3");
+assert.equal(controlledResWithoutKey.diagnostics.placesApiConfigured, false);
+assert.equal(controlledResWithoutKey.diagnostics.hops, 2);
+ok("share.google multi-hop fixture resolves complete chain and extracts business name without fabricating Place ID");
+
+// Test B: With server-side Places API key configured
+const controlledResWithKey = await resolveGoogleMapsUrl("https://share.google/controlledTest123", {
+  dnsLookupImpl: safeDnsLookup,
+  fetchImpl: mockShareGoogleFetch,
+  placesApiKey: "mock_server_places_api_key",
+});
+assert.equal(controlledResWithKey.ok, true);
+assert.equal(controlledResWithKey.source, "google_places_api");
+assert.equal(controlledResWithKey.business_name, "Dynamic Test Business");
+assert.equal(controlledResWithKey.place_id, "ChIJ_dynamic_verified_place_id");
+assert.equal(controlledResWithKey.review_url, "https://search.google.com/local/writereview?placeid=ChIJ_dynamic_verified_place_id");
+ok("share.google multi-hop fixture seamlessly triggers Google Places API fallback when API key is provided");
+
+// 1.23 Regression Test: Live exact URL resolution pipeline test
+const exactUrlLiveRes = await resolveGoogleMapsUrl("https://share.google/MfygMxeCrhahq4kAq");
+assert.equal(exactUrlLiveRes.business_name, "Graphix Circle");
+assert.equal(exactUrlLiveRes.diagnostics.kgmid, "/g/11xt4mq0gn");
+assert.equal(exactUrlLiveRes.diagnostics.hops, 2);
+assert.ok(exactUrlLiveRes.resolved_url.includes("Graphix+Circle"));
+ok("Exact failing URL (https://share.google/MfygMxeCrhahq4kAq) resolves live through all hops to Graphix Circle");
+
 
 // =========================================================================
 // SECTION 2: FEATURE 2 — BITLY-STYLE TYPQR SHORT LINKS FOR DYNAMIC QR CODES
@@ -667,3 +745,4 @@ assert.equal(reviewDynRedir.headers.Location, canonicalReview);
 ok("Dynamic Google Review QR works sequentially: resolves review destination, then encodes TypQR short link");
 
 console.log(`\nALL ${passed} FEATURE 1 & FEATURE 2 TESTS PASSED WITH 100% SUCCESS!\n`);
+process.exit(0);
