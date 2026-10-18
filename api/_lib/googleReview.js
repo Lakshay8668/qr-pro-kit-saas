@@ -209,8 +209,8 @@ export function extractMapsMetadata(rawUrl) {
     const placeMatch = parsed.pathname.match(/\/maps\/place\/([^/@?]+)/i);
     if (placeMatch) {
       const segment = decodeURIComponent(placeMatch[1].replace(/\+/g, " ")).trim();
-      // Ensure the segment is NOT a Place ID or a hex pair
-      if (!isValidPlaceId(segment) && !/^(?:0x)?[0-9a-fA-F]{10,16}:(?:0x)?[0-9a-fA-F]{10,16}$/.test(segment)) {
+      // Ensure the segment is NOT a Place ID (ChI... / GhI...) or a hex pair
+      if (!/^(?:ChI|GhI)[A-Za-z0-9_-]{24,}$/i.test(segment) && !/^(?:0x)?[0-9a-fA-F]{10,16}:(?:0x)?[0-9a-fA-F]{10,16}$/.test(segment)) {
         businessName = segment;
       }
     }
@@ -311,58 +311,228 @@ export function validateOfficialReviewUrl(urlStr) {
   return { valid: false, error: "URL does not match a recognized official Google review format" };
 }
 
+export function isNameSimilar(expectedName, candidateName) {
+  if (!expectedName || !candidateName) return false;
+  const cleanExp = expectedName.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  const cleanCand = candidateName.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleanExp || !cleanCand) return false;
+  if (cleanExp === cleanCand) return true;
+  if (cleanCand.includes(cleanExp) || cleanExp.includes(cleanCand)) return true;
+  const expWords = cleanExp.split(" ").filter((w) => w.length > 2);
+  const candWords = new Set(cleanCand.split(" ").filter((w) => w.length > 2));
+  if (expWords.length === 0 || candWords.size === 0) return false;
+  const matches = expWords.filter((w) => candWords.has(w));
+  return matches.length === expWords.length;
+}
+
 /**
- * Optional Google Places API lookup fallback.
- * Uses Find Place From Text to obtain a verified Place ID when a business name / query is present.
- * Keeps API key strictly server-side and safely handles quotas and errors.
+ * Server-side Google Places API lookup fallback.
+ * Supports:
+ *  - Places API (New): POST https://places.googleapis.com/v1/places:searchText
+ *  - Places API (Legacy): GET https://maps.googleapis.com/maps/api/place/findplacefromtext/json
+ * Safely handles quotas, invalid keys, no matches, confidence verification, and multiple matches.
+ * The API key is kept strictly server-side and never exposed.
  */
 export async function lookupGooglePlacesApi({ query, lat, lng, apiKey, fetchImpl = fetch, timeoutMs = 4000 }) {
   if (!apiKey || typeof apiKey !== "string" || !apiKey.trim() || !query) {
     return null;
   }
 
+  const cleanKey = apiKey.trim();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    let url = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(query)}&inputtype=textquery&fields=place_id,name,formatted_address&key=${encodeURIComponent(apiKey.trim())}`;
-    if (Number.isFinite(lat) && Number.isFinite(lng)) {
-      url += `&locationbias=point:${lat},${lng}`;
+    let candidates = [];
+    let apiStatus = null;
+    let errorMessage = null;
+    let newApiDisabled = false;
+
+    // 1. Try Places API (New): POST https://places.googleapis.com/v1/places:searchText
+    try {
+      const newApiPayload = { textQuery: query };
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        newApiPayload.locationBias = {
+          circle: {
+            center: { latitude: lat, longitude: lng },
+            radius: 50000.0,
+          },
+        };
+      }
+
+      const newResp = await fetchImpl("https://places.googleapis.com/v1/places:searchText", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": cleanKey,
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress",
+        },
+        body: JSON.stringify(newApiPayload),
+      });
+
+      if (newResp.ok) {
+        const newData = await newResp.json();
+        if (Array.isArray(newData.places) && newData.places.length > 0) {
+          candidates = newData.places.map((p) => ({
+            place_id: p.id,
+            name: p.displayName?.text || "",
+            address: p.formattedAddress || "",
+          }));
+          apiStatus = "OK";
+        } else if (Array.isArray(newData.candidates) && newData.candidates.length > 0) {
+          candidates = newData.candidates.map((c) => ({
+            place_id: c.place_id,
+            name: c.name || "",
+            address: c.formatted_address || "",
+          }));
+          apiStatus = "OK";
+        } else if (newData.places && Array.isArray(newData.places) && newData.places.length === 0) {
+          apiStatus = "ZERO_RESULTS";
+        } else {
+          // Response did not have places field, fall back to legacy
+          newApiDisabled = true;
+        }
+      } else {
+        const errJson = await newResp.json().catch(() => null);
+        const errStatus = errJson?.error?.status || "";
+        const errCode = newResp.status;
+        const msg = errJson?.error?.message || "";
+
+        if (errCode === 429 || errStatus === "RESOURCE_EXHAUSTED") {
+          return {
+            ok: false,
+            status: "OVER_QUERY_LIMIT",
+            code: "places_quota_exceeded",
+            error: "Google Places API quota exceeded. Please verify your billing and quota limits in Google Cloud Console.",
+          };
+        }
+        if (errCode === 400 && msg.toLowerCase().includes("api key not valid")) {
+          return {
+            ok: false,
+            status: "REQUEST_DENIED",
+            code: "invalid_api_key",
+            error: "Google Places API key is invalid. Please verify GOOGLE_PLACES_API_KEY in Google Cloud Console.",
+          };
+        }
+        newApiDisabled = true;
+        errorMessage = msg;
+      }
+    } catch (newErr) {
+      if (newErr?.name === "AbortError") throw newErr;
+      newApiDisabled = true;
     }
 
-    const resp = await fetchImpl(url, {
-      method: "GET",
-      signal: controller.signal,
-      headers: { Accept: "application/json" },
-    });
+    // 2. If Places API (New) returned no candidates or wasn't enabled, fallback to Legacy Places API
+    if (candidates.length === 0 && (!apiStatus || newApiDisabled)) {
+      let legacyUrl = `https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input=${encodeURIComponent(query)}&inputtype=textquery&fields=place_id,name,formatted_address&key=${encodeURIComponent(cleanKey)}`;
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        legacyUrl += `&locationbias=point:${lat},${lng}`;
+      }
 
-    if (!resp.ok) {
-      return { ok: false, status: resp.status, reason: "http_error" };
+      const legacyResp = await fetchImpl(legacyUrl, {
+        method: "GET",
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+
+      if (legacyResp.ok) {
+        const legacyData = await legacyResp.json();
+        apiStatus = legacyData.status;
+        errorMessage = legacyData.error_message;
+
+        if (apiStatus === "OK" && Array.isArray(legacyData.candidates)) {
+          candidates = legacyData.candidates.map((c) => ({
+            place_id: c.place_id,
+            name: c.name || "",
+            address: c.formatted_address || "",
+          }));
+        } else if (apiStatus === "OVER_QUERY_LIMIT") {
+          return {
+            ok: false,
+            status: "OVER_QUERY_LIMIT",
+            code: "places_quota_exceeded",
+            error: "Google Places API quota exceeded. Please verify your billing and quota limits in Google Cloud Console.",
+          };
+        } else if (apiStatus === "REQUEST_DENIED") {
+          return {
+            ok: false,
+            status: "REQUEST_DENIED",
+            code: "invalid_api_key",
+            error: "Google Places API authorization failed. Please check that GOOGLE_PLACES_API_KEY is valid and has Places API enabled in Google Cloud Console.",
+          };
+        }
+      }
     }
 
-    const data = await resp.json();
-    if (data.status === "OK" && Array.isArray(data.candidates) && data.candidates.length > 0) {
-      const top = data.candidates[0];
-      if (top.place_id && isValidPlaceId(top.place_id)) {
+    // 3. Check candidate results
+    if (candidates.length === 0) {
+      return {
+        ok: false,
+        status: apiStatus || "ZERO_RESULTS",
+        code: "no_match",
+        error: `No business location found matching "${query}".`,
+      };
+    }
+
+    const validCandidates = candidates.filter((c) => c.place_id && isValidPlaceId(c.place_id));
+    if (validCandidates.length === 0) {
+      return {
+        ok: false,
+        status: "ZERO_RESULTS",
+        code: "no_match",
+        error: `No verified Place ID found for "${query}".`,
+      };
+    }
+
+    // 4. Single candidate match: verify confidence
+    if (validCandidates.length === 1) {
+      const top = validCandidates[0];
+      const matchesConfidence = query.startsWith("cid:") || isNameSimilar(query, top.name);
+      if (matchesConfidence) {
         return {
           ok: true,
           place_id: top.place_id,
           name: top.name,
-          address: top.formatted_address,
-          status: data.status,
+          address: top.address,
+          status: "OK",
+          candidates: validCandidates,
         };
       }
+      return {
+        ok: false,
+        status: "INSUFFICIENT_CONFIDENCE",
+        code: "insufficient_confidence",
+        business_name: query,
+        error: `Found location "${top.name}" (${top.address || "unknown address"}), but the name does not closely match "${query}". Please confirm your listing or paste the review link directly.`,
+        candidates: validCandidates.map((c) => ({
+          place_id: c.place_id,
+          name: c.name,
+          address: c.address,
+          review_url: buildGoogleReviewUrl(c.place_id),
+        })),
+      };
     }
 
+    // 5. Multiple candidates: require user selection to prevent mismatch
     return {
       ok: false,
-      status: data.status || "ZERO_RESULTS",
-      error_message: data.error_message,
+      status: "MULTIPLE_MATCHES",
+      code: "multiple_matches",
+      business_name: query,
+      error: `Multiple matching locations found for "${query}". Please select the correct listing.`,
+      candidates: validCandidates.map((c) => ({
+        place_id: c.place_id,
+        name: c.name,
+        address: c.address,
+        review_url: buildGoogleReviewUrl(c.place_id),
+      })),
     };
   } catch (err) {
     return {
       ok: false,
       status: err?.name === "AbortError" ? "TIMEOUT" : "NETWORK_ERROR",
+      code: err?.name === "AbortError" ? "upstream_timeout" : "network_error",
       error: err?.message,
     };
   } finally {
@@ -687,7 +857,7 @@ export async function resolveGoogleMapsUrl(inputUrl, options = {}) {
       }
 
       lastStatus = resp.status;
-      const location = resp.headers.get("location");
+      const location = resp.headers?.get ? resp.headers.get("location") : null;
       redirectChain.push({
         hop: hops,
         from: targetUrl,
@@ -782,26 +952,54 @@ export async function resolveGoogleMapsUrl(inputUrl, options = {}) {
         fetchImpl,
       });
 
-      if (apiRes && apiRes.ok && apiRes.place_id) {
-        return {
-          ok: true,
-          place_id: apiRes.place_id,
-          review_url: buildGoogleReviewUrl(apiRes.place_id),
-          business_name: apiRes.name || meta?.businessName,
-          verification: "places_api_verified",
-          source: "google_places_api",
-          placeId: apiRes.place_id,
-          reviewUrl: buildGoogleReviewUrl(apiRes.place_id),
-          resolved_url: targetUrl,
-          resolvedUrl: targetUrl,
-          diagnostics: {
-            hops,
-            redirectChain,
-            finalUrl: targetUrl,
-            placesApiStatus: apiRes.status,
-            businessName: meta?.businessName,
-          },
-        };
+      if (apiRes) {
+        if (apiRes.ok && apiRes.place_id) {
+          return {
+            ok: true,
+            place_id: apiRes.place_id,
+            review_url: buildGoogleReviewUrl(apiRes.place_id),
+            business_name: apiRes.name || meta?.businessName,
+            address: apiRes.address || null,
+            verification: "places_api_verified",
+            source: "google_places_api",
+            placeId: apiRes.place_id,
+            reviewUrl: buildGoogleReviewUrl(apiRes.place_id),
+            resolved_url: targetUrl,
+            resolvedUrl: targetUrl,
+            diagnostics: {
+              hops,
+              redirectChain,
+              finalUrl: targetUrl,
+              placesApiStatus: apiRes.status,
+              businessName: meta?.businessName,
+              placesApiConfigured: true,
+            },
+          };
+        }
+
+        if (apiRes.code) {
+          return {
+            ok: false,
+            code: apiRes.code,
+            error: apiRes.error,
+            business_name: meta?.businessName || lookupQuery,
+            candidates: apiRes.candidates || [],
+            resolved_url: targetUrl,
+            resolvedUrl: targetUrl,
+            diagnostics: {
+              hops,
+              redirectChain,
+              finalUrl: targetUrl,
+              status: lastStatus,
+              businessName: meta?.businessName || null,
+              kgmid: meta?.kgmid || null,
+              kgs: meta?.kgs || null,
+              cid: meta?.cid || null,
+              placesApiConfigured: true,
+              placesApiStatus: apiRes.status,
+            },
+          };
+        }
       }
     }
   }

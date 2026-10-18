@@ -15,6 +15,7 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
   const [copied, setCopied] = useState(false);
   const [manualFallback, setManualFallback] = useState(false);
   const [manualValue, setManualValue] = useState("");
+  const [candidates, setCandidates] = useState([]);
 
   const directReviewUrl = data.reviewUrl || (data.placeId && data.placeId.startsWith("http")
     ? data.placeId
@@ -32,6 +33,7 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
 
     setResolving(true);
     setError("");
+    setCandidates([]);
 
     try {
       const res = await resolveGoogleReviewLink(raw);
@@ -43,19 +45,40 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
           inputUrl: raw,
           placeId,
           reviewUrl,
+          businessName: res.business_name || null,
+          address: res.address || null,
           resolvedUrl: res.resolvedUrl || res.resolved_url || null,
         });
         setError("");
+        setCandidates([]);
         setManualFallback(false);
       } else {
         const msg = res.error || "Could not automatically resolve the Google Place ID from this link. You can paste your official Google review link or Place ID directly.";
         setError(msg);
+        if (Array.isArray(res.candidates) && res.candidates.length > 0) {
+          setCandidates(res.candidates);
+        }
         setManualFallback(true);
       }
     } catch (err) {
       const serverData = err.data || {};
       let msg = serverData.error || err?.message;
-      if (serverData.code === "unsupported_url") {
+
+      if (Array.isArray(serverData.candidates) && serverData.candidates.length > 0) {
+        setCandidates(serverData.candidates);
+      }
+
+      if (serverData.code === "multiple_matches") {
+        msg = "Multiple matching business locations found. Please select your exact location below:";
+      } else if (serverData.code === "insufficient_confidence") {
+        msg = serverData.error || "Please verify your location from the suggestions below:";
+      } else if (serverData.code === "places_quota_exceeded") {
+        msg = "Google Places API quota exceeded. Please check Google Cloud billing or paste your review link directly.";
+      } else if (serverData.code === "invalid_api_key") {
+        msg = "Google Places API key is unauthorized or invalid. Please check server configuration or paste your review link directly.";
+      } else if (serverData.code === "no_match") {
+        msg = serverData.error || "No matching business location found. Please paste your review link directly.";
+      } else if (serverData.code === "unsupported_url") {
         msg = "Unsupported URL: Please use a Share link from Google Maps (maps.app.goo.gl, share.google) or a full Google Maps place link.";
       } else if (serverData.code === "unsafe_redirect") {
         msg = "Security notice: This link redirected to an unapproved or private network destination.";
@@ -71,6 +94,22 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
     } finally {
       setResolving(false);
     }
+  };
+
+  const handleSelectCandidate = (cand) => {
+    if (!cand || !cand.place_id) return;
+    const reviewUrl = cand.review_url || `https://search.google.com/local/writereview?placeid=${encodeURIComponent(cand.place_id)}`;
+    setData({
+      ...data,
+      inputUrl: cand.name || inputUrl,
+      placeId: cand.place_id,
+      reviewUrl,
+      businessName: cand.name || null,
+      address: cand.address || null,
+    });
+    setCandidates([]);
+    setError("");
+    setManualFallback(false);
   };
 
   const handleCopy = async (textToCopy) => {
@@ -144,12 +183,15 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
     setInputUrl("");
     setManualValue("");
     setError("");
+    setCandidates([]);
     setManualFallback(false);
     setData({
       ...data,
       inputUrl: "",
       placeId: "",
       reviewUrl: "",
+      businessName: null,
+      address: null,
       resolvedUrl: null,
     });
   };
@@ -220,6 +262,58 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
         </div>
       )}
 
+      {/* Multiple candidates selection list (Task 5: Matching Safety) */}
+      {candidates && candidates.length > 0 && (
+        <div
+          className="candidates-selection-box"
+          style={{
+            padding: "12px",
+            borderRadius: "8px",
+            background: "var(--card-bg, #ffffff)",
+            border: "1px solid var(--border)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: "13px", color: "var(--text-main)" }}>
+            📍 Select your verified location:
+          </div>
+          {candidates.map((cand, idx) => (
+            <div
+              key={cand.place_id || idx}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "12px",
+                padding: "10px 12px",
+                borderRadius: "6px",
+                background: "rgba(0, 0, 0, 0.02)",
+                border: "1px solid var(--border)",
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: "13px" }}>{cand.name}</div>
+                {cand.address && (
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+                    {cand.address}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="primary-btn"
+                style={{ fontSize: "12px", padding: "6px 12px", whiteSpace: "nowrap" }}
+                onClick={() => handleSelectCandidate(cand)}
+              >
+                Select This Listing
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Generated Link Result Card (ProductMate-style) */}
       {directReviewUrl && (
         <div
@@ -258,6 +352,13 @@ export default function GoogleReviewGenerator({ data = {}, setData }) {
               </span>
             )}
           </div>
+
+          {(data.businessName || data.address) && (
+            <div style={{ fontSize: "13px", color: "#065f46", fontWeight: 500, lineHeight: 1.4 }}>
+              <strong>{data.businessName || "Verified Listing"}</strong>
+              {data.address ? ` — ${data.address}` : ""}
+            </div>
+          )}
 
           <div
             style={{

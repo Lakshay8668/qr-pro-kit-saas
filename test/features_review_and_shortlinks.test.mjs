@@ -387,8 +387,106 @@ const placesQuotaRes = await resolveGoogleMapsUrl("https://www.google.com/maps/p
   fetchImpl: mockPlacesQuotaFetch,
 });
 assert.equal(placesQuotaRes.ok, false);
-assert.equal(placesQuotaRes.code, "place_id_not_found");
-ok("Google Places API OVER_QUERY_LIMIT quota error handled gracefully without crash");
+assert.equal(placesQuotaRes.code, "places_quota_exceeded");
+ok("Google Places API OVER_QUERY_LIMIT quota error returns code: places_quota_exceeded");
+
+// 1.18b Regression Test: Google Places API Invalid Key Handling
+const mockPlacesInvalidKeyFetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({
+    status: "REQUEST_DENIED",
+    error_message: "The provided API key is invalid.",
+  }),
+});
+const placesInvalidKeyRes = await resolveGoogleMapsUrl("https://www.google.com/maps/place/Sydney+Opera+House/@-33.8567844,151.2152967,17z", {
+  dnsLookupImpl: safeDnsLookup,
+  placesApiKey: "invalid_key_xyz",
+  fetchImpl: mockPlacesInvalidKeyFetch,
+});
+assert.equal(placesInvalidKeyRes.ok, false);
+assert.equal(placesInvalidKeyRes.code, "invalid_api_key");
+ok("Google Places API REQUEST_DENIED returns code: invalid_api_key without leaking secret");
+
+// 1.18c Regression Test: Google Places API No Match (ZERO_RESULTS)
+const mockPlacesZeroResultsFetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({
+    status: "ZERO_RESULTS",
+    candidates: [],
+  }),
+});
+const placesZeroRes = await resolveGoogleMapsUrl("https://www.google.com/maps/place/NonExistentBiz123XYZ/@0,0,1z", {
+  dnsLookupImpl: safeDnsLookup,
+  placesApiKey: "mock_test_key_12345",
+  fetchImpl: mockPlacesZeroResultsFetch,
+});
+assert.equal(placesZeroRes.ok, false);
+assert.equal(placesZeroRes.code, "no_match");
+ok("Google Places API ZERO_RESULTS returns code: no_match");
+
+// 1.18d Regression Test: Google Places API Multiple Matches (Disambiguation required)
+const mockPlacesMultipleMatchesFetch = async () => ({
+  ok: true,
+  status: 200,
+  json: async () => ({
+    status: "OK",
+    candidates: [
+      {
+        place_id: "ChIJ_branch_delhi_1234567890",
+        name: "Graphix Circle - Delhi",
+        formatted_address: "123 Connaught Place, New Delhi",
+      },
+      {
+        place_id: "ChIJ_branch_mumbai_123456789",
+        name: "Graphix Circle - Mumbai",
+        formatted_address: "456 Bandra West, Mumbai",
+      },
+    ],
+  }),
+});
+const placesMultiRes = await resolveGoogleMapsUrl("https://www.google.com/maps/place/Graphix+Circle/@0,0,1z", {
+  dnsLookupImpl: safeDnsLookup,
+  placesApiKey: "mock_test_key_12345",
+  fetchImpl: mockPlacesMultipleMatchesFetch,
+});
+assert.equal(placesMultiRes.ok, false);
+assert.equal(placesMultiRes.code, "multiple_matches");
+assert.equal(placesMultiRes.candidates.length, 2);
+assert.equal(placesMultiRes.candidates[0].place_id, "ChIJ_branch_delhi_1234567890");
+assert.equal(placesMultiRes.candidates[1].place_id, "ChIJ_branch_mumbai_123456789");
+ok("Google Places API multiple matches returns code: multiple_matches with candidate list for user selection");
+
+// 1.18e Regression Test: Places API (New) Text Search Support (POST places:searchText)
+const mockPlacesNewApiFetch = async (url, opts) => {
+  if (url.includes("places:searchText")) {
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        places: [
+          {
+            id: "ChIJ_places_new_api_verified_id",
+            displayName: { text: "Graphix Circle" },
+            formattedAddress: "789 Creative Lane, Design City",
+          },
+        ],
+      }),
+    };
+  }
+  return { ok: false, status: 404 };
+};
+const placesNewApiRes = await resolveGoogleMapsUrl("https://www.google.com/maps/place/Graphix+Circle/@0,0,1z", {
+  dnsLookupImpl: safeDnsLookup,
+  placesApiKey: "mock_new_places_api_key",
+  fetchImpl: mockPlacesNewApiFetch,
+});
+assert.equal(placesNewApiRes.ok, true);
+assert.equal(placesNewApiRes.place_id, "ChIJ_places_new_api_verified_id");
+assert.equal(placesNewApiRes.business_name, "Graphix Circle");
+assert.equal(placesNewApiRes.address, "789 Creative Lane, Design City");
+ok("Places API (New) POST places:searchText is supported and verified");
 
 // 1.19 Regression Test: Official Google Review URL Pasted Directly
 const officialWritereviewUrl = "https://search.google.com/local/writereview?placeid=ChIJq3uGrhyPsUcRoqE7daOz-LY";
