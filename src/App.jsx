@@ -11,6 +11,7 @@ import { useAuth } from "./lib/useAuth";
 import { useBilling } from "./lib/useBilling";
 import { Link } from "react-router-dom";
 import AppShell from "./components/AppShell";
+import ShortLinkSection from "./components/ShortLinkSection";
 import {
   DEFAULT_DESIGN,
   SHAPES,
@@ -80,13 +81,18 @@ export default function App({ embedded = false }) {
     }
   }, [payload, type, JSON.stringify(data)]);
 
+  const [shortUrl, setShortUrl] = useState("");
+  const [encodeShortLinkInQr, setEncodeShortLinkInQr] = useState(false);
   const activeDisplayPayload = payload || livePayload;
-  const warnings = useMemo(() => scanWarnings(design, activeDisplayPayload), [design, activeDisplayPayload]);
+  const effectiveQrPayload = (encodeShortLinkInQr && shortUrl) ? shortUrl : activeDisplayPayload;
+  const warnings = useMemo(() => scanWarnings(design, effectiveQrPayload), [design, effectiveQrPayload]);
 
   const changeType = (t) => {
     setType(t);
     setPayload("");
     setCreatedId("");
+    setShortUrl("");
+    setEncodeShortLinkInQr(false);
     setIsDynamic(false);
     setSavedStatic(false);
     setPw("");
@@ -187,11 +193,15 @@ export default function App({ embedded = false }) {
             setNotice("QR generated and saved to your dashboard.");
           } catch (e) {
             setCreatedId("");
+    setShortUrl("");
+    setEncodeShortLinkInQr(false);
             setSavedStatic(false);
             setNotice(`QR generated. (Note: cloud dashboard sync requires Firestore: ${e?.message || "database unavailable"}).`);
           }
         } else {
           setCreatedId("");
+    setShortUrl("");
+    setEncodeShortLinkInQr(false);
           setSavedStatic(false);
           setNotice(user ? "QR generated." : "QR generated. Sign in (top-right) to keep your QR codes saved in a dashboard.");
         }
@@ -229,7 +239,7 @@ export default function App({ embedded = false }) {
   };
 
   const download = async (format) => {
-    const targetPayload = activeDisplayPayload;
+    const targetPayload = effectiveQrPayload;
     if (!targetPayload) {
       setError("Please enter a destination or content before downloading.");
       return;
@@ -245,7 +255,7 @@ export default function App({ embedded = false }) {
   };
 
   const copyLink = async () => {
-    const targetPayload = activeDisplayPayload;
+    const targetPayload = effectiveQrPayload;
     if (!targetPayload) return;
     try {
       await navigator.clipboard.writeText(targetPayload);
@@ -473,7 +483,7 @@ export default function App({ embedded = false }) {
 
           <div className="qr-stage">
             <QrPreview
-              value={activeDisplayPayload}
+              value={effectiveQrPayload}
               design={design}
               size={320}
               loading={loading}
@@ -511,6 +521,18 @@ export default function App({ embedded = false }) {
               Download SVG
             </button>
           </div>
+          {/* Integrated Short Link section below QR preview */}
+          {activeDisplayPayload && (activeDisplayPayload.startsWith("http://") || activeDisplayPayload.startsWith("https://")) && (
+            <ShortLinkSection
+              destination={activeDisplayPayload}
+              destinationLabel={typeLabel || "URL"}
+              user={user}
+              encodeShortLinkInQr={encodeShortLinkInQr}
+              onToggleEncodeShortLink={setEncodeShortLinkInQr}
+              onShortUrlGenerated={(url) => setShortUrl(url)}
+            />
+          )}
+
           {activeDisplayPayload && (
             <div className="qr-meta-box" style={{ marginTop: "14px", padding: "12px", background: "var(--bg-elevated, #f8fafc)", borderRadius: "8px", border: "1px solid var(--border, #e2e8f0)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>

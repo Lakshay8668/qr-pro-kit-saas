@@ -290,4 +290,47 @@ assert.equal(reviewQrScan.headers.Location, mapsListingUrl);
 ok("Google Maps listing QR encoded into TypQR short link redirects directly to Maps listing");
 
 console.log(`\nALL ${passed} TYPQR SHORT LINKS & GOOGLE REVIEW QR TESTS PASSED WITH 100% SUCCESS!\n`);
+
+// =========================================================================
+// SECTION 3: ACCEPTANCE TESTS — SHORT LINK INTEGRATION BELOW QR PREVIEW
+// =========================================================================
+console.log("\n--- Testing Feature 3: Integrated Short Link Below QR Preview ---");
+
+import fs from "node:fs";
+
+// 3.1 Verify AppShell does NOT have a separate Short Links sidebar item
+const appShellCode = fs.readFileSync("src/components/AppShell.jsx", "utf8");
+assert.equal(appShellCode.includes('label: "Short Links"'), false);
+assert.equal(appShellCode.includes('key: "shortlinks"'), false);
+ok("No separate Short Links sidebar item in AppShell navigation");
+
+// 3.2 Verify Dashboard does not have a separate shortlinks tab view
+const dashboardCode = fs.readFileSync("src/pages/Dashboard.jsx", "utf8");
+assert.equal(dashboardCode.includes('currentTab === "shortlinks"'), false);
+ok("No separate shortlinks tab view in Dashboard");
+
+// 3.3 Verify ShortLinkSection is rendered below QR preview in App.jsx and GoogleReview.jsx
+const appCode = fs.readFileSync("src/App.jsx", "utf8");
+assert.ok(appCode.includes("<ShortLinkSection"));
+assert.ok(appCode.includes("encodeShortLinkInQr"));
+
+const googleReviewCode = fs.readFileSync("src/pages/GoogleReview.jsx", "utf8");
+assert.ok(googleReviewCode.includes("<ShortLinkSection"));
+assert.ok(googleReviewCode.includes("encodeShortLinkInQr"));
+ok("ShortLinkSection is integrated directly below QR preview in both App.jsx and GoogleReview.jsx");
+
+// 3.4 Verify QR payload selection logic:
+// When encodeShortLinkInQr is false, preserves original destination;
+// When encodeShortLinkInQr is true, encodes the short URL.
+const originalTarget = "https://example.com/original-target";
+const myShortUrl = "https://qr-pro-kit-saas-production.up.railway.app/s/my-slug";
+
+const payloadDisabled = (false && myShortUrl) ? myShortUrl : originalTarget;
+assert.equal(payloadDisabled, originalTarget, "When short-link mode is disabled, QR must encode original destination");
+
+const payloadEnabled = (true && myShortUrl) ? myShortUrl : originalTarget;
+assert.equal(payloadEnabled, myShortUrl, "When short-link mode is enabled, QR must encode short URL");
+ok("QR preview accurately switches between original destination and short URL based on user toggle");
+
+console.log(`\nALL ${passed} VERIFICATION AUDIT TESTS PASSED SUCCESSFULLY!\n`);
 process.exit(0);

@@ -53,7 +53,7 @@ export default function AppShell({
   const navItems = [
     { key: "overview", label: "Overview", icon: IconDashboard, route: "/dashboard?tab=overview", altRoute: "/overview" },
     { key: "links", label: "My QR Codes", icon: IconQrCode, route: "/dashboard?tab=links", altRoute: "/links" },
-    { key: "shortlinks", label: "Short Links", icon: IconLink, route: "/dashboard?tab=shortlinks", altRoute: "/short-links" },
+
     { key: "create", label: "Create QR Code", icon: IconPlus, route: "/dashboard?tab=create", altRoute: "/" },
     { key: "bulk", label: "Bulk Create", icon: IconBulk, route: "/dashboard?tab=bulk", altRoute: "/bulk" },
     { key: "events", label: "Event Management", icon: IconCalendar, route: "/dashboard?tab=events", altRoute: "/events" },
@@ -70,7 +70,7 @@ export default function AppShell({
     if (item.route && (location.pathname + location.search) === item.route) return true;
     if (item.altRoute && location.pathname === item.altRoute) return true;
     if (item.key === "events" && location.pathname.startsWith("/events")) return true;
-    if (item.key === "shortlinks" && (location.pathname === "/short-links" || location.pathname === "/shortlinks")) return true;
+
     if (item.key === "links" && location.pathname === "/dashboard" && (!location.search || location.search.includes("tab=links"))) return true;
     return false;
   };

@@ -5,8 +5,9 @@ import React, { useState, useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import QrPreview from "../components/QrPreview";
+import ShortLinkSection from "../components/ShortLinkSection";
 import { useAuth } from "../lib/useAuth";
-import { createLink, createShortLink } from "../lib/links";
+import { createLink } from "../lib/links";
 import {
   DEFAULT_DESIGN,
   SHAPES,
@@ -25,7 +26,6 @@ import {
   IconExternalLink,
   IconQrCode,
   IconPlus,
-  IconLink,
 } from "../components/Icons";
 import {
   extractPlaceIdLocally,
@@ -46,13 +46,11 @@ export default function GoogleReviewPage() {
 
   const [generatedReviewUrl, setGeneratedReviewUrl] = useState("");
   const [destinationType, setDestinationType] = useState(""); // "direct_review" | "maps_listing"
-  const [useShortLink, setUseShortLink] = useState(false);
-  const [shortSlug, setShortSlug] = useState("");
-  const [createdShortUrl, setCreatedShortUrl] = useState("");
+  const [shortUrl, setShortUrl] = useState("");
+  const [encodeShortLinkInQr, setEncodeShortLinkInQr] = useState(false);
 
   const [notice, setNotice] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [shortCopied, setShortCopied] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -64,19 +62,19 @@ export default function GoogleReviewPage() {
     frameText: "Review us on Google ★",
   });
 
-  // Effective QR payload to encode: uses short link if created/requested, otherwise the destination URL
+  // Effective QR payload to encode: uses short link if short-link mode is enabled, otherwise the original destination URL
   const qrEncodedValue = useMemo(() => {
-    if (useShortLink && createdShortUrl) return createdShortUrl;
+    if (encodeShortLinkInQr && shortUrl) return shortUrl;
     return generatedReviewUrl;
-  }, [useShortLink, createdShortUrl, generatedReviewUrl]);
+  }, [encodeShortLinkInQr, shortUrl, generatedReviewUrl]);
 
   const handleGenerate = (e) => {
     if (e) e.preventDefault();
     setNotice(null);
     setCopied(false);
-    setShortCopied(false);
     setSavedSuccess(false);
-    setCreatedShortUrl("");
+    setShortUrl("");
+    setEncodeShortLinkInQr(false);
 
     // 1. Direct review URL input check
     if (existingReviewUrl && existingReviewUrl.trim()) {
@@ -158,40 +156,14 @@ export default function GoogleReviewPage() {
     setDestinationType("");
   };
 
-  const copyToClipboard = async (text, setCopiedFn) => {
+  const copyToClipboard = async (text) => {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      setCopiedFn(true);
-      setTimeout(() => setCopiedFn(false), 2500);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     } catch {
       window.prompt("Copy link:", text);
-    }
-  };
-
-  const handleCreateTypQrShortLink = async () => {
-    if (!generatedReviewUrl) return;
-    if (!user) {
-      navigate("/dashboard");
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await createShortLink({
-        destination: generatedReviewUrl,
-        slug: shortSlug.trim() || undefined,
-        label: businessName ? `Google Review: ${businessName}` : "Google Review QR",
-        prefix: "s",
-        design,
-      });
-      const generatedShort = res.shortUrl || (res.slug ? `${window.location.origin}/s/${res.slug}` : "");
-      setCreatedShortUrl(generatedShort);
-      setSavedSuccess(true);
-      setTimeout(() => setSavedSuccess(false), 3000);
-    } catch (err) {
-      alert(`Could not create short link: ${err?.message || "Server error"}`);
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -218,19 +190,15 @@ export default function GoogleReviewPage() {
     }
     setSaving(true);
     try {
-      if (useShortLink) {
-        await handleCreateTypQrShortLink();
-      } else {
-        await createLink({
-          label: businessName ? `Google Review: ${businessName}` : "Google Review Link",
-          destination: generatedReviewUrl,
-          type: "url",
-          kind: "redirect",
-          design,
-        });
-        setSavedSuccess(true);
-        setTimeout(() => setSavedSuccess(false), 3000);
-      }
+      await createLink({
+        label: businessName ? `Google Review: ${businessName}` : "Google Review Link",
+        destination: generatedReviewUrl,
+        type: "url",
+        kind: "redirect",
+        design,
+      });
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err) {
       alert(`Could not save link: ${err?.message || "Storage error"}`);
     } finally {
@@ -322,42 +290,6 @@ export default function GoogleReviewPage() {
                 />
               </div>
 
-              {/* Optional TypQR Short Link connection */}
-              <div style={{ marginBottom: "1.25rem", padding: "0.85rem", borderRadius: "8px", background: "#f8fafc", border: "1px solid #e2e8f0" }}>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.88rem", fontWeight: 600, color: "#1e293b", cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={useShortLink}
-                    onChange={(e) => setUseShortLink(e.target.checked)}
-                    style={{ width: "16px", height: "16px", accentColor: "#2563eb", cursor: "pointer" }}
-                  />
-                  <span>Create a TypQR short link for this QR code</span>
-                </label>
-                <p style={{ margin: "0.25rem 0 0 1.5rem", fontSize: "0.78rem", color: "#64748b" }}>
-                  Encodes a short link (e.g. <code>https://.../s/myreview</code>) in the QR code instead of the long URL, enabling live click tracking and over-the-air updates.
-                </p>
-
-                {useShortLink && (
-                  <div style={{ marginTop: "0.75rem", marginLeft: "1.5rem" }}>
-                    <label style={{ display: "block", fontSize: "0.78rem", fontWeight: 600, color: "#475569", marginBottom: "0.25rem" }}>
-                      Custom Short Link Slug (Optional)
-                    </label>
-                    <div style={{ display: "flex", alignItems: "center" }}>
-                      <span style={{ padding: "0.4rem 0.6rem", background: "#e2e8f0", border: "1px solid #cbd5e1", borderRight: "none", borderRadius: "6px 0 0 6px", fontSize: "0.8rem", color: "#475569" }}>
-                        /s/
-                      </span>
-                      <input
-                        type="text"
-                        placeholder="e.g. my-review-qr"
-                        value={shortSlug}
-                        onChange={(e) => setShortSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))}
-                        style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: "0 6px 6px 0", fontSize: "0.85rem", flex: 1 }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
               {/* Informational Notice */}
               {notice && (
                 <div
@@ -443,7 +375,7 @@ export default function GoogleReviewPage() {
                   />
                   <button
                     type="button"
-                    onClick={() => copyToClipboard(generatedReviewUrl, setCopied)}
+                    onClick={() => copyToClipboard(generatedReviewUrl)}
                     style={{
                       padding: "0.6rem 0.85rem",
                       background: copied ? "#059669" : "#ffffff",
@@ -480,39 +412,6 @@ export default function GoogleReviewPage() {
                     <IconExternalLink size={15} />
                   </a>
                 </div>
-
-                {/* Short link row if enabled */}
-                {useShortLink && createdShortUrl && (
-                  <div style={{ marginBottom: "1rem", padding: "0.75rem", borderRadius: "8px", background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
-                    <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "#166534", marginBottom: "0.35rem" }}>
-                      TypQR Short Link (Encoded in QR):
-                    </div>
-                    <div style={{ display: "flex", gap: "0.5rem" }}>
-                      <input
-                        type="text"
-                        readOnly
-                        value={createdShortUrl}
-                        style={{ flex: 1, padding: "0.45rem 0.65rem", borderRadius: "6px", border: "1px solid #86efac", background: "#ffffff", fontSize: "0.82rem", fontFamily: "monospace" }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => copyToClipboard(createdShortUrl, setShortCopied)}
-                        style={{
-                          padding: "0.45rem 0.75rem",
-                          background: shortCopied ? "#059669" : "#ffffff",
-                          color: shortCopied ? "#ffffff" : "#166534",
-                          border: "1px solid #86efac",
-                          borderRadius: "6px",
-                          fontSize: "0.8rem",
-                          fontWeight: 600,
-                          cursor: "pointer",
-                        }}
-                      >
-                        {shortCopied ? "Copied" : "Copy"}
-                      </button>
-                    </div>
-                  </div>
-                )}
 
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                   <button
@@ -588,7 +487,7 @@ export default function GoogleReviewPage() {
                 QR Code Live Preview
               </h3>
               <p style={{ margin: "0 0 1rem 0", fontSize: "0.8rem", color: "#6b7280" }}>
-                Encodes {useShortLink && createdShortUrl ? "TypQR Short Link" : destinationType === "direct_review" ? "Direct Review URL" : "Google Maps Listing"}.
+                Encodes {encodeShortLinkInQr && shortUrl ? "TypQR Short Link" : destinationType === "direct_review" ? "Direct Review URL" : "Google Maps Listing"}.
               </p>
 
               <div style={{ display: "flex", justifyContent: "center", marginBottom: "1.25rem", padding: "1.25rem", background: "#f9fafb", borderRadius: "8px", border: "1px solid #f3f4f6" }}>
@@ -630,7 +529,7 @@ export default function GoogleReviewPage() {
                 />
               </div>
 
-              <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
                 <button
                   type="button"
                   onClick={() => setDesign({ ...design, frameStyle: design.frameStyle === "bar" ? "none" : "bar" })}
@@ -649,6 +548,16 @@ export default function GoogleReviewPage() {
                   {design.frameStyle === "bar" ? "✓ Frame Active" : "Add Frame"}
                 </button>
               </div>
+
+              {/* Integrated Short Link Section directly below the QR code and customisation controls */}
+              <ShortLinkSection
+                destination={generatedReviewUrl}
+                destinationLabel={destinationType === "direct_review" ? "Direct Google Review" : "Google Maps listing"}
+                user={user}
+                encodeShortLinkInQr={encodeShortLinkInQr}
+                onToggleEncodeShortLink={setEncodeShortLinkInQr}
+                onShortUrlGenerated={(url) => setShortUrl(url)}
+              />
             </div>
           )}
         </div>

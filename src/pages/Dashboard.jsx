@@ -11,7 +11,7 @@ import Bulk from "./Bulk";
 import Billing from "./Billing";
 import EventsPage from "./Events";
 import GoogleReviewPage from "./GoogleReview";
-import ShortLinksPage from "./ShortLinks";
+
 import UsageMeter from "../components/UsageMeter";
 import AuthForm from "../components/AuthForm";
 import QrPreview from "../components/QrPreview";
@@ -418,7 +418,7 @@ export default function Dashboard({ defaultTab }) {
   const validTabs = [
     "overview",
     "links",
-    "shortlinks",
+
     "create",
     "bulk",
     "events",
@@ -542,7 +542,7 @@ export default function Dashboard({ defaultTab }) {
   const tabTitles = {
     overview: "Platform Overview",
     links: "My QR Codes",
-    shortlinks: "Short Links",
+
     create: "Create QR Code",
     bulk: "Bulk Create QR Codes",
     analytics: "Global Analytics",
@@ -988,11 +988,6 @@ export default function Dashboard({ defaultTab }) {
             </div>
           )}
         </div>
-      )}
-
-      {/* -------------------- SUB-VIEW: SHORT LINKS -------------------- */}
-      {currentTab === "shortlinks" && (
-        <ShortLinksPage />
       )}
 
       {/* -------------------- SUB-VIEW: CREATE QR CODE -------------------- */}

@@ -33,8 +33,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/overview" element={<Dashboard defaultTab="overview" />} />
           <Route path="/links" element={<Dashboard defaultTab="links" />} />
-          <Route path="/short-links" element={<Dashboard defaultTab="shortlinks" />} />
-          <Route path="/shortlinks" element={<Dashboard defaultTab="shortlinks" />} />
+
+
           <Route path="/analytics" element={<Dashboard defaultTab="analytics" />} />
           <Route path="/folders" element={<Dashboard defaultTab="folders" />} />
           <Route path="/settings" element={<Dashboard defaultTab="settings" />} />
