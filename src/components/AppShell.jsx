@@ -17,6 +17,8 @@ import {
   IconSearch,
   IconMenu,
   IconClose,
+  IconCalendar,
+  IconStar,
 } from "./Icons";
 
 export default function AppShell({
@@ -52,6 +54,8 @@ export default function AppShell({
     { key: "links", label: "My QR Codes", icon: IconQrCode, route: "/dashboard?tab=links", altRoute: "/links" },
     { key: "create", label: "Create QR Code", icon: IconPlus, route: "/dashboard?tab=create", altRoute: "/" },
     { key: "bulk", label: "Bulk Create", icon: IconBulk, route: "/dashboard?tab=bulk", altRoute: "/bulk" },
+    { key: "events", label: "Event Management", icon: IconCalendar, route: "/dashboard?tab=events", altRoute: "/events" },
+    { key: "reviews", label: "Google Review Generator", icon: IconStar, route: "/dashboard?tab=reviews", altRoute: "/reviews" },
     { key: "analytics", label: "Analytics", icon: IconChart, route: "/dashboard?tab=analytics", altRoute: "/analytics" },
     { key: "folders", label: "Folders", icon: IconFolder, route: "/dashboard?tab=folders", altRoute: "/folders" },
     { key: "billing", label: "Plan & Billing", icon: IconBilling, route: "/dashboard?tab=billing", altRoute: "/billing" },

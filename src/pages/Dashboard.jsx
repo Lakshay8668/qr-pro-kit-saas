@@ -9,6 +9,8 @@ import Modal from "../components/Modal";
 import App from "../App";
 import Bulk from "./Bulk";
 import Billing from "./Billing";
+import EventsPage from "./Events";
+import GoogleReviewPage from "./GoogleReview";
 import UsageMeter from "../components/UsageMeter";
 import AuthForm from "../components/AuthForm";
 import QrPreview from "../components/QrPreview";
@@ -417,6 +419,8 @@ export default function Dashboard({ defaultTab }) {
     "links",
     "create",
     "bulk",
+    "events",
+    "reviews",
     "analytics",
     "folders",
     "billing",
@@ -989,6 +993,14 @@ export default function Dashboard({ defaultTab }) {
       )}
 
       {/* -------------------- SUB-VIEW: BULK CREATE -------------------- */}
+      {currentTab === "events" && (
+        <EventsPage embeddedInDashboard />
+      )}
+
+      {currentTab === "reviews" && (
+        <GoogleReviewPage />
+      )}
+
       {currentTab === "bulk" && (
         <Bulk embedded={true} />
       )}

@@ -45,7 +45,7 @@ export function makeDb(initial = {}) {
     batch: () => {
       const ops = [];
       return {
-        create: (r, d) => ops.push({ r, d }),
+        create: (r, d) => ops.push({ r, d }), set: (r, d) => ops.push({ r, d }),
         commit: async () => { if (ops.some(({ r }) => C(r._name).has(r.id))) throw exists(); ops.forEach(({ r, d }) => C(r._name).set(r.id, merge({}, d))); },
       };
     },

@@ -26,10 +26,11 @@ let redirectHandler;
 let razorpayWebhookHandler;
 let stripeWebhookHandler;
 let usersHandler;
+let eventsHandler;
 
 async function getHandlers() {
   if (!billingHandler) {
-    const [b, l, a, q, rz, st, u] = await Promise.all([
+    const [b, l, a, q, rz, st, u, ev] = await Promise.all([
       import("./api/billing.js").then((m) => m.default),
       import("./api/links.js").then((m) => m.default),
       import("./api/admin.js").then((m) => m.default),
@@ -37,6 +38,7 @@ async function getHandlers() {
       import("./api/webhooks/razorpay.js").then((m) => m.default),
       import("./api/webhooks/stripe.js").then((m) => m.default),
       import("./api/users.js").then((m) => m.default),
+      import("./api/events.js").then((m) => m.default),
     ]);
     billingHandler = b;
     linksHandler = l;
@@ -45,6 +47,7 @@ async function getHandlers() {
     razorpayWebhookHandler = rz;
     stripeWebhookHandler = st;
     usersHandler = u;
+    eventsHandler = ev;
   }
   return {
     billing: billingHandler,
@@ -54,6 +57,7 @@ async function getHandlers() {
     razorpayWebhook: razorpayWebhookHandler,
     stripeWebhook: stripeWebhookHandler,
     users: usersHandler,
+    events: eventsHandler,
   };
 }
 
@@ -267,6 +271,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (pathname === "/api/admin") return await handlers.admin(req, res);
       if (pathname === "/api/users") return await handlers.users(req, res);
+      if (pathname === "/api/events" || pathname.startsWith("/api/events/") || pathname === "/api/v1/events") {
+        return await handlers.events(req, res);
+      }
       if (pathname.startsWith("/api/q/") || pathname.startsWith("/api/r/")) {
         const idMatch = pathname.match(/^\/api\/(?:q|r)\/([A-Za-z0-9_-]+)$/);
         if (idMatch) req.query.id = idMatch[1];

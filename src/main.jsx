@@ -10,6 +10,7 @@ import Admin from "./pages/Admin";
 import Pricing from "./pages/Pricing";
 import Billing from "./pages/Billing";
 import DraftQrPage from "./pages/DraftQrPage";
+import CheckInScanner from "./pages/CheckInScanner";
 import "./styles.css";
 
 function NotFound() {
@@ -36,6 +37,11 @@ ReactDOM.createRoot(document.getElementById("root")).render(
           <Route path="/settings" element={<Dashboard defaultTab="settings" />} />
           <Route path="/help" element={<Dashboard defaultTab="help" />} />
           <Route path="/bulk" element={<Bulk />} />
+          <Route path="/events" element={<Dashboard defaultTab="events" />} />
+          <Route path="/events/:id/checkin" element={<CheckInScanner />} />
+          <Route path="/checkin" element={<CheckInScanner />} />
+          <Route path="/reviews" element={<Dashboard defaultTab="reviews" />} />
+          <Route path="/google-review" element={<Dashboard defaultTab="reviews" />} />
           <Route path="/admin" element={<Admin />} />
           <Route path="/pricing" element={<Pricing />} />
           <Route path="/billing" element={<Billing />} />
