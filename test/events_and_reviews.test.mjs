@@ -3,6 +3,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { makeDb, callJson } from "./fakeDb.mjs";
 import { createEventsHandler } from "../api/_lib/events.js";
 import { extractPlaceIdLocally, isValidGoogleReviewUrl } from "../src/lib/googleReviewLocal.js";
@@ -353,6 +354,112 @@ describe("TypQR Event Management & Zero-API Review Generator", () => {
       });
       assert.equal(r.code, 400);
       assert.equal(r.body.code, "event_cancelled");
+    });
+  });
+
+  // =========================================================================
+  // MODULE 1 REGRESSION: EVENT TICKET MANAGEMENT ROUTING & WORKFLOW
+  // =========================================================================
+  describe("Event Ticket Management Dedicated Route & Workflow", () => {
+    test("Manage Tickets button links to dedicated /events/:eventId/tickets route", () => {
+      const eventsPageCode = fs.readFileSync("src/pages/Events.jsx", "utf8");
+      // Must link directly to /events/${evt.id}/tickets
+      assert.ok(
+        eventsPageCode.includes("`/events/${evt.id}/tickets`"),
+        "Events.jsx must render Link pointing to `/events/${evt.id}/tickets`"
+      );
+      assert.ok(
+        !eventsPageCode.includes('onClick={() => setSearchParams({ eventId: evt.id })}'),
+        "Events.jsx must not use broken searchParam mutation on Manage Tickets button"
+      );
+    });
+
+    test("Dedicated route /events/:eventId/tickets and /events/:id/tickets registered in main.jsx", () => {
+      const mainCode = fs.readFileSync("src/main.jsx", "utf8");
+      assert.ok(
+        mainCode.includes('path="/events/:eventId/tickets"'),
+        "main.jsx must register /events/:eventId/tickets route"
+      );
+      assert.ok(
+        mainCode.includes('path="/events/:id/tickets"'),
+        "main.jsx must register /events/:id/tickets route"
+      );
+      assert.ok(
+        mainCode.includes("EventTickets"),
+        "main.jsx must map ticket route to EventTickets component"
+      );
+    });
+
+    test("AppShell sidebar keeps Event Management active on /events/:eventId/tickets subroutes", () => {
+      const appShellCode = fs.readFileSync("src/components/AppShell.jsx", "utf8");
+      assert.ok(
+        appShellCode.includes('item.key === "events" && location.pathname.startsWith("/events")'),
+        "AppShell.jsx must keep Event Management highlighted for all /events subroutes"
+      );
+    });
+
+    test("Event ticket management loads event details & tickets without redirecting to create QR", async () => {
+      const db = makeDb();
+      const eventsHandler = createEventsHandler({
+        getDb: () => db,
+        serverTs: () => new Date().toISOString(),
+        verify: mockVerify,
+      });
+
+      // 1. Create an event
+      const createRes = await callJson(eventsHandler, {
+        method: "POST",
+        query: { action: "create" },
+        headers: { authorization: "Bearer token_alice" },
+        body: {
+          event: {
+            name: "Dedicated Tickets Summit",
+            venueName: "Room A",
+            venueAddress: "123 Event Lane",
+            eventDate: "2026-12-01",
+            startTime: "10:00",
+            capacity: 20,
+          },
+        },
+      });
+      assert.equal(createRes.code, 200);
+      const eventId = createRes.body.event.id;
+
+      // 2. Fetch event data as the dedicated ticket management page does
+      const getRes = await callJson(eventsHandler, {
+        method: "GET",
+        query: { action: "get", id: eventId },
+        headers: { authorization: "Bearer token_alice" },
+      });
+      assert.equal(getRes.code, 200);
+      assert.equal(getRes.body.ok, true);
+      assert.equal(getRes.body.event.id, eventId);
+      assert.equal(getRes.body.event.name, "Dedicated Tickets Summit");
+      assert.equal(Array.isArray(getRes.body.tickets), true);
+
+      // 3. Issue a ticket directly from ticket management
+      const ticketRes = await callJson(eventsHandler, {
+        method: "POST",
+        query: { action: "create-ticket" },
+        headers: { authorization: "Bearer token_alice" },
+        body: {
+          eventId,
+          guestName: "Dedicated Attendee",
+          guestEmail: "attendee@example.com",
+          ticketType: "VIP",
+        },
+      });
+      assert.equal(ticketRes.code, 200);
+      assert.equal(ticketRes.body.ticket.guestName, "Dedicated Attendee");
+
+      // 4. Verify updated tickets list
+      const updatedRes = await callJson(eventsHandler, {
+        method: "GET",
+        query: { action: "get", id: eventId },
+        headers: { authorization: "Bearer token_alice" },
+      });
+      assert.equal(updatedRes.body.tickets.length, 1);
+      assert.equal(updatedRes.body.tickets[0].guestName, "Dedicated Attendee");
     });
   });
 

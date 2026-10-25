@@ -67,6 +67,7 @@ export default function AppShell({
     if (currentTab && currentTab === item.key) return true;
     if (item.route && (location.pathname + location.search) === item.route) return true;
     if (item.altRoute && location.pathname === item.altRoute) return true;
+    if (item.key === "events" && location.pathname.startsWith("/events")) return true;
     if (item.key === "links" && location.pathname === "/dashboard" && (!location.search || location.search.includes("tab=links"))) return true;
     return false;
   };

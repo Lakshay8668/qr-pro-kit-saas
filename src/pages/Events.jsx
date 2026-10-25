@@ -61,6 +61,13 @@ export default function EventsPage({ embeddedInDashboard = false }) {
 
   // Selected Event Detail View
   const selectedEventId = searchParams.get("eventId") || null;
+
+  // Redirect to dedicated ticket management page if selected
+  useEffect(() => {
+    if (selectedEventId) {
+      navigate(`/events/${selectedEventId}/tickets`, { replace: true });
+    }
+  }, [selectedEventId, navigate]);
   const [activeEvent, setActiveEvent] = useState(null);
   const [tickets, setTickets] = useState([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -1108,10 +1115,11 @@ export default function EventsPage({ embeddedInDashboard = false }) {
 
                   {/* Actions footer */}
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", paddingTop: "0.75rem", borderTop: "1px solid #f3f4f6" }}>
-                    <button
-                      type="button"
-                      onClick={() => setSearchParams({ eventId: evt.id })}
+                    <Link
+                      to={`/events/${evt.id}/tickets`}
                       style={{
+                        display: "inline-flex",
+                        alignItems: "center",
                         padding: "0.4rem 0.8rem",
                         background: "#2563eb",
                         color: "#ffffff",
@@ -1119,11 +1127,12 @@ export default function EventsPage({ embeddedInDashboard = false }) {
                         borderRadius: "6px",
                         fontSize: "0.82rem",
                         fontWeight: 600,
+                        textDecoration: "none",
                         cursor: "pointer",
                       }}
                     >
                       Manage Tickets →
-                    </button>
+                    </Link>
 
                     <div style={{ display: "flex", gap: "0.35rem" }}>
                       <Link
