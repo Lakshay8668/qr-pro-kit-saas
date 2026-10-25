@@ -13,7 +13,7 @@ import crypto from "node:crypto";
 import { parseUA, isBot } from "./ua.js";
 import { messagePage, passwordPage, bioPage } from "./pages.js";
 
-const SAFE_ID = /^[A-Za-z0-9_-]{4,40}$/;
+const SAFE_ID = /^[A-Za-z0-9_-]{3,60}$/;
 const isHttp = (u) => typeof u === "string" && /^https?:\/\//i.test(u) && (() => { try { new URL(u); return true; } catch { return false; } })();
 const attempts = new Map(); // best-effort brute-force limiter (per warm instance)
 
@@ -213,6 +213,8 @@ export function createHandler(deps) {
         country: String(h["x-vercel-ip-country"] || "").slice(0, 2).toUpperCase(),
         region: String(h["x-vercel-ip-country-region"] || "").slice(0, 32),
         city: city.slice(0, 64),
+        referer: String(h.referer || h.referrer || "").slice(0, 200),
+        ua: String(ua || "").slice(0, 200),
         vid,
       };
       if (ev === "click") rec.target = clickTarget;

@@ -65,14 +65,23 @@ export async function resolveGoogleReviewLink(inputUrl) {
   });
 }
 
+export const formatShortUrl = (slug) => {
+  if (!slug) return "";
+  return `${publicBase()}/s/${slug}`;
+};
+
 function toServerLink({
   destination = "", label, type = "url", kind = "redirect", payload = "", bio = null,
   password = null, design = null, destinations = null, expiresAt = null, maxScans = null,
+  slug = null, active = true, prefix = "r",
 }) {
   return {
     kind, destination, label, type, payload, bio, password, design, destinations,
     expiresAt: expiresAt ? (expiresAt instanceof Date ? expiresAt.getTime() : expiresAt) : null,
     maxScans: maxScans || null,
+    slug: slug || null,
+    active: active !== false,
+    prefix,
   };
 }
 
@@ -81,9 +90,20 @@ export async function createLink(args) {
   const { destination = "", kind = "redirect", payload = "" } = args;
   if (kind === "static" && !(payload || "").trim()) throw new Error("Nothing to save.");
   if (kind === "redirect" && !isValidHttpUrl((destination || "").trim())) throw new Error("Destination must be a valid http or https URL.");
-  const { id } = await api("/api/links?action=create", { method: "POST", body: { link: toServerLink(args) } });
+  const res = await api("/api/links?action=create", { method: "POST", body: { link: toServerLink(args) } });
   triggerMyLinksRefresh();
-  return id;
+  return res?.id || res;
+}
+
+// Dedicated first-party Short Link creator
+export async function createShortLink({ destination, slug, label, prefix = "s", design = null }) {
+  if (!isValidHttpUrl((destination || "").trim())) throw new Error("Destination must be a valid http or https URL.");
+  const res = await api("/api/links?action=create", {
+    method: "POST",
+    body: { link: toServerLink({ destination, slug, label, prefix, design, kind: "redirect", type: "shortlink" }) },
+  });
+  triggerMyLinksRefresh();
+  return res;
 }
 
 // Bulk create (Pro+): rows = [{ destination, label, design }, ...] -> ids in the same order. All-or-nothing.

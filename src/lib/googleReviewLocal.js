@@ -30,7 +30,7 @@ export function extractPlaceIdLocally(input) {
     return chijMatch[1];
   }
 
-  // 5. Hex pair pattern in data: 0x...:0x... (note: hex pair is CID, not standard place ID string, so we don't fabricate)
+  // 5. Hex pair pattern in data: 0x...:0x... (CID, not standard place ID string)
   return null;
 }
 
@@ -49,6 +49,33 @@ export function isValidGoogleReviewUrl(url) {
       return true;
     }
     return false;
+  } catch {
+    return false;
+  }
+}
+
+export function isValidGoogleMapsUrl(url) {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    const isGoogleHost =
+      host === "maps.google.com" ||
+      host.endsWith(".google.com") ||
+      host === "google.com" ||
+      host === "maps.app.goo.gl" ||
+      host === "goo.gl" ||
+      host === "share.google" ||
+      host.endsWith(".google");
+
+    if (!isGoogleHost) return false;
+    return (
+      u.pathname.includes("/maps") ||
+      host.includes("maps") ||
+      host === "share.google" ||
+      u.searchParams.has("q") ||
+      u.searchParams.has("query")
+    );
   } catch {
     return false;
   }

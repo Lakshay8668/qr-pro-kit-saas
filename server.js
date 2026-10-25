@@ -213,7 +213,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 2. Dynamic QR redirect: /q/:id and /r/:slug
-  const redirectMatch = pathname.match(/^\/(?:q|r)\/([A-Za-z0-9_-]+)$/);
+  const redirectMatch = pathname.match(/^\/(?:s|r|q)\/([A-Za-z0-9_-]+)$/);
   if (redirectMatch) {
     req.query.id = redirectMatch[1];
     try {
@@ -223,6 +223,34 @@ const server = http.createServer(async (req, res) => {
       console.error("Redirect handler error:", err);
       res.statusCode = 500;
       return res.end("Internal redirect error");
+    }
+  }
+
+  // 2b. Root-level short link fallback: /:slug (when not reserved and not static asset)
+  const rootSlugMatch = pathname.match(/^\/([A-Za-z0-9-]{3,60})$/);
+  if (rootSlugMatch) {
+    const slugCandidate = rootSlugMatch[1];
+    const lower = slugCandidate.toLowerCase();
+    const SYSTEM_RESERVED = new Set([
+      "api", "dashboard", "events", "reviews", "shortlinks", "short-links",
+      "checkin", "login", "admin", "bulk", "billing", "pricing", "links",
+      "s", "q", "r", "health", "assets", "favicon", "manifest", "static", "draft",
+      "overview", "create", "analytics", "folders", "settings", "help"
+    ]);
+    if (!SYSTEM_RESERVED.has(lower)) {
+      try {
+        const { getDb } = await import("./api/_lib/db.js");
+        const db = getDb();
+        const col = db.collection("links");
+        const slugSnap = await col.where("slug", "==", slugCandidate).limit(1).get();
+        if (slugSnap && !slugSnap.empty) {
+          req.query.id = slugCandidate;
+          const handlers = await getHandlers();
+          return await handlers.redirect(req, res);
+        }
+      } catch (err) {
+        // Fall through to SPA on lookup failure
+      }
     }
   }
 

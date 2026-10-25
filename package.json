@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server.js",
-    "test": "node test/handler.test.mjs && node test/admin.test.mjs && node test/billing.test.mjs && node test/quota.test.mjs && node test/server.test.mjs && node test/production.test.mjs && node test/ui_editing.test.mjs && node test/navigation.test.mjs && node test/features_upgrade.test.mjs && node test/verify_complete_qr.mjs && node test/features_review_and_shortlinks.test.mjs && node --test test/events_and_reviews.test.mjs"
+    "test": "node test/handler.test.mjs && node test/admin.test.mjs && node test/billing.test.mjs && node test/quota.test.mjs && node test/server.test.mjs && node test/production.test.mjs && node test/ui_editing.test.mjs && node test/navigation.test.mjs && node test/features_upgrade.test.mjs && node test/verify_complete_qr.mjs && node test/features_review_and_shortlinks.test.mjs && node --test test/events_and_reviews.test.mjs && node test/shortlinks_and_maps_review.test.mjs"
   },
   "dependencies": {
     "firebase": "^12.4.0",

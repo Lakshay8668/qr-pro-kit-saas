@@ -28,6 +28,14 @@ const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
 const MAX_BULK = 200;
 const KINDS = ["redirect", "bio", "static"];
 
+export const RESERVED_SLUGS = new Set([
+  "api", "dashboard", "events", "reviews", "shortlinks", "short-links",
+  "checkin", "login", "admin", "bulk", "billing", "pricing", "links",
+  "s", "q", "r", "health", "assets", "favicon", "favicon.ico", "manifest",
+  "robots", "robots.txt", "static", "draft", "scan", "qr", "auth",
+  "overview", "create", "analytics", "folders", "settings", "help",
+]);
+
 const json = (res, code, body) => {
   res.statusCode = code;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -98,22 +106,32 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         expiresAt = new Date(ms);
       }
       let slug = null;
-      if (kind !== "static" && raw.slug && /^[A-Za-z0-9_-]{4,30}$/.test(String(raw.slug).trim())) {
-        slug = String(raw.slug).trim();
+      if (kind !== "static" && raw.slug !== undefined && raw.slug !== null && String(raw.slug).trim() !== "") {
+        const candidate = String(raw.slug).trim();
+        if (!/^[A-Za-z0-9_-]{3,60}$/.test(candidate)) {
+          throw new Fail(400, "bad_request", "Slug must be 3-60 alphanumeric characters, hyphens, or underscores.");
+        }
+        if (RESERVED_SLUGS.has(candidate.toLowerCase())) {
+          throw new Fail(400, "reserved_slug", `"${candidate}" is a reserved system path and cannot be used as a short link slug.`);
+        }
+        slug = candidate;
       }
       const base = getPublicBaseUrl();
+      const prefix = raw.prefix === "s" ? "s" : "r";
+      const active = raw.active !== false;
       return {
         kind, destination, payload, destinations, bio, password,
         label: String(raw.label || "").trim().slice(0, 120) || "Untitled",
         type,
         design: cleanDesign(raw.design),
         scans: 0,
-        active: true,
+        active,
         expiresAt,
         maxScans: kind === "static" ? null : cleanMax(raw.maxScans),
         ownerId: uid,
         slug: slug || null,
-        shortUrl: slug ? `${base}/r/${slug}` : null,
+        shortUrl: slug ? `${base}/${prefix}/${slug}` : null,
+        prefix,
         createdAt: serverTs(),
       };
     } catch (e) {
@@ -125,11 +143,28 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
   async function writeOne(db, doc) {
     const isDynamic = doc.kind !== "static";
     const base = getPublicBaseUrl();
+    const prefix = doc.prefix === "s" ? "s" : "r";
+
+    if (isDynamic && doc.slug) {
+      try {
+        const colQuery = await db.collection("links").where("slug", "==", doc.slug).limit(1).get();
+        if (!colQuery.empty) {
+          throw new Fail(409, "slug_taken", `The short link slug "${doc.slug}" is already in use. Please choose another.`);
+        }
+      } catch (e) {
+        if (e instanceof Fail) throw e;
+      }
+      doc.shortUrl = `${base}/${prefix}/${doc.slug}`;
+      const id = newId();
+      await db.collection("links").doc(id).create(doc);
+      return { id, slug: doc.slug, shortUrl: doc.shortUrl };
+    }
+
     for (let i = 0; i < 6; i++) {
       const id = newId();
       if (isDynamic) {
         if (!doc.slug) doc.slug = id;
-        doc.shortUrl = `${base}/r/${doc.slug}`;
+        doc.shortUrl = `${base}/${prefix}/${doc.slug}`;
         // Collision check: verify no other link has this slug
         try {
           const colQuery = await db.collection("links").where("slug", "==", doc.slug).limit(1).get();
@@ -416,13 +451,17 @@ export function createLinksHandler({ getDb, verify, serverTs, now = () => Date.n
         if ("design" in patch) out.design = cleanDesign(patch.design);
         if ("slug" in patch && patch.slug) {
           const s = String(patch.slug).trim();
-          if (!/^[A-Za-z0-9_-]{4,40}$/.test(s)) throw new Fail(400, "bad_request", "Invalid slug format.");
+          if (!/^[A-Za-z0-9_-]{3,60}$/.test(s)) throw new Fail(400, "bad_request", "Slug must be 3-60 alphanumeric characters, hyphens, or underscores.");
+          if (RESERVED_SLUGS.has(s.toLowerCase())) {
+            throw new Fail(400, "reserved_slug", `"${s}" is a reserved system path and cannot be used as a short link slug.`);
+          }
           const colQuery = await db.collection("links").where("slug", "==", s).limit(1).get();
           if (!colQuery.empty && colQuery.docs[0].id !== id) {
             throw new Fail(409, "slug_taken", "This short link slug is already taken.");
           }
           out.slug = s;
-          out.shortUrl = `${getPublicBaseUrl()}/r/${s}`;
+          const pref = cur.prefix === "s" ? "s" : "r";
+          out.shortUrl = `${getPublicBaseUrl()}/${pref}/${s}`;
         }
 
         await ref.update(out);
